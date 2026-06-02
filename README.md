@@ -1,5 +1,7 @@
 # MinerU PDF Batch Parser
 
+[中文说明](README.zh-CN.md)
+
 Use MinerU API to parse long PDF documents into Markdown. The scripts handle
 MinerU's page, file-size, and rate limits by splitting PDFs into chunks,
 uploading them in batches, polling results, and merging each document back into
