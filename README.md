@@ -174,3 +174,8 @@ Validation complete: 16 directories checked, 0 issue(s).
   default and recommended for this project.
 - Real parsing uploads PDF content to MinerU. Use `--dry-run` if you only want
   to inspect page ranges.
+
+## Contributors
+
+- piperacillin
+- Codex
