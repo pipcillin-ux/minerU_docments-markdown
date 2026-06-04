@@ -16,6 +16,7 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from mineru_batch_parse import rewrite_markdown_links
+from structure_utils import markdown_file
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,17 +34,15 @@ def validate_output_dir(out_dir: Path) -> tuple[dict[str, int | str], list[str]]
     issues: list[str] = []
     task_file = out_dir / "tasks.json"
     tasks = json.loads(task_file.read_text(encoding="utf-8"))
-    md_files = sorted(out_dir.glob("*.md"))
+    merged_md = markdown_file(out_dir)
 
-    if not md_files:
+    if merged_md is None:
         issues.append("missing merged markdown")
         md_text = ""
         md_size = 0
     else:
-        if len(md_files) > 1:
-            issues.append(f"multiple merged markdown files: {', '.join(path.name for path in md_files)}")
-        md_text = md_files[0].read_text(encoding="utf-8", errors="replace")
-        md_size = md_files[0].stat().st_size
+        md_text = merged_md.read_text(encoding="utf-8", errors="replace")
+        md_size = merged_md.stat().st_size
 
     markers = re.findall(r"<!-- MinerU batch: pages ([^>]+) -->", md_text)
     if len(markers) != len(tasks):

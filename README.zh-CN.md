@@ -163,6 +163,45 @@ output/骨伤科专病中医临床诊治/骨伤科专病中医临床诊治.md
 Validation complete: 16 directories checked, 0 issue(s).
 ```
 
+## 结构偏移诊断与语义重建
+
+MinerU 输出的 Markdown 是候选解析结果，不应直接等同于原文语义结构。复杂 PDF 可能出现标题层级扁平、目录污染正文、页眉页脚混入、表格降级为文本、图片型表格遗漏等问题。
+
+生成文档画像和结构诊断：
+
+```bash
+.venv/bin/python profile_documents.py
+```
+
+该命令会生成：
+
+```text
+output/document_profiles_summary.csv
+output/quality_report.md
+output/<文档名>/document_profile.json
+output/<文档名>/structure_diagnostics.json
+output/<文档名>/quality_report.md
+```
+
+生成结构化中间层和语义修复版 Markdown：
+
+```bash
+.venv/bin/python build_structured_blocks.py
+```
+
+该命令会生成：
+
+```text
+output/<文档名>/structured_blocks.jsonl
+output/<文档名>/<文档名>.semantic.md
+```
+
+建议使用方式：
+
+- `<文档名>.md`：保留 MinerU 原始合并版，用于溯源。
+- `<文档名>.semantic.md`：规则修复后的结构版，用于 RAG、切块和知识抽取。
+- `structured_blocks.jsonl`：机器可读结构化中间层，包含页码、分块、块类型、标题层级、章节路径、bbox、表格、图片等信息。
+
 ## 注意事项
 
 - 默认推荐使用本地上传模式，也就是只传本地 PDF 路径。

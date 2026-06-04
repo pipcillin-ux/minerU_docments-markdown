@@ -170,6 +170,49 @@ Example final line:
 Validation complete: 16 directories checked, 0 issue(s).
 ```
 
+## Structure Diagnostics And Semantic Rebuild
+
+MinerU Markdown is a candidate parse, not the final semantic structure. Complex
+PDFs may flatten heading levels, mix TOC entries into the body, include repeated
+headers/footers, degrade tables into plain text, or leave table-like images for
+manual review.
+
+Generate document profiles and structure diagnostics:
+
+```bash
+.venv/bin/python profile_documents.py
+```
+
+This writes:
+
+```text
+output/document_profiles_summary.csv
+output/quality_report.md
+output/<document-name>/document_profile.json
+output/<document-name>/structure_diagnostics.json
+output/<document-name>/quality_report.md
+```
+
+Build structured blocks and semantic Markdown:
+
+```bash
+.venv/bin/python build_structured_blocks.py
+```
+
+This writes:
+
+```text
+output/<document-name>/structured_blocks.jsonl
+output/<document-name>/<document-name>.semantic.md
+```
+
+Recommended usage:
+
+- `<document-name>.md`: original merged MinerU Markdown for traceability.
+- `<document-name>.semantic.md`: rule-rebuilt structure for RAG and extraction.
+- `structured_blocks.jsonl`: machine-readable blocks with page, chunk, type,
+  heading level, section path, bbox, table, and image metadata.
+
 ## Notes
 
 - `--url` can be used for a single public PDF URL, but local upload mode is the
