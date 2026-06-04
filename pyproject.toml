@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mineru-documents-markdown"
+version = "0.1.0"
+description = "Batch parse long PDFs with MinerU and rebuild structured Markdown outputs."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "pypdf>=4.0.0",
+]
+
+[project.scripts]
+mineru-batch-parse = "mineru_documents_markdown.mineru_batch_parse:main"
+mineru-validate-outputs = "mineru_documents_markdown.validate_outputs:main"
+mineru-profile-documents = "mineru_documents_markdown.profile_documents:main"
+mineru-build-structured-blocks = "mineru_documents_markdown.build_structured_blocks:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

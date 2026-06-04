@@ -3,6 +3,9 @@
 .venv/
 __pycache__/
 *.pyc
+*.egg-info/
+build/
+dist/
 
 # Source PDFs and parsed outputs can be large or sensitive.
 docs/

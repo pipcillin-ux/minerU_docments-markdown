@@ -17,6 +17,15 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
+This installs 4 CLI commands:
+
+```text
+mineru-batch-parse
+mineru-validate-outputs
+mineru-profile-documents
+mineru-build-structured-blocks
+```
+
 Put your MinerU token in `.env`:
 
 ```text
@@ -40,7 +49,7 @@ By default, every `*.pdf` in `docs/` is processed.
 Run:
 
 ```bash
-.venv/bin/python mineru_batch_parse.py
+.venv/bin/mineru-batch-parse
 ```
 
 The script will:
@@ -59,7 +68,7 @@ The script will:
 Preview page ranges without uploading anything:
 
 ```bash
-.venv/bin/python mineru_batch_parse.py --dry-run
+.venv/bin/mineru-batch-parse --dry-run
 ```
 
 ## Single PDF
@@ -67,7 +76,7 @@ Preview page ranges without uploading anything:
 Process one PDF:
 
 ```bash
-.venv/bin/python mineru_batch_parse.py \
+.venv/bin/mineru-batch-parse \
   --pdf docs/example.pdf \
   --out output/example
 ```
@@ -83,13 +92,13 @@ interruption.
 Submit missing tasks only:
 
 ```bash
-.venv/bin/python mineru_batch_parse.py --submit-only
+.venv/bin/mineru-batch-parse --submit-only
 ```
 
 Retry failed tasks:
 
 ```bash
-.venv/bin/python mineru_batch_parse.py --resubmit-failed
+.venv/bin/mineru-batch-parse --resubmit-failed
 ```
 
 ## Rate Limits
@@ -114,7 +123,7 @@ Defaults:
 If a chunk exceeds 200 MB, rerun with a smaller page chunk size:
 
 ```bash
-.venv/bin/python mineru_batch_parse.py --chunk-size 100 --resubmit-failed
+.venv/bin/mineru-batch-parse --chunk-size 100 --resubmit-failed
 ```
 
 ## Output
@@ -154,7 +163,7 @@ output/骨伤科专病中医临床诊治/骨伤科专病中医临床诊治.md
 Run:
 
 ```bash
-.venv/bin/python validate_outputs.py
+.venv/bin/mineru-validate-outputs
 ```
 
 The validator prints one line per output directory and checks:
@@ -180,7 +189,7 @@ manual review.
 Generate document profiles and structure diagnostics:
 
 ```bash
-.venv/bin/python profile_documents.py
+.venv/bin/mineru-profile-documents
 ```
 
 This writes:
@@ -196,7 +205,7 @@ output/<document-name>/quality_report.md
 Build structured blocks and semantic Markdown:
 
 ```bash
-.venv/bin/python build_structured_blocks.py
+.venv/bin/mineru-build-structured-blocks
 ```
 
 This writes:
@@ -215,6 +224,11 @@ Recommended usage:
 
 ## Notes
 
+- The project uses a standard `src/` layout. Core code lives under
+  `src/mineru_documents_markdown/`.
+- Top-level `mineru_batch_parse.py`, `validate_outputs.py`,
+  `profile_documents.py`, and `build_structured_blocks.py` are compatibility
+  wrappers, so the previous commands still work.
 - `--url` can be used for a single public PDF URL, but local upload mode is the
   default and recommended for this project.
 - Real parsing uploads PDF content to MinerU. Use `--dry-run` if you only want

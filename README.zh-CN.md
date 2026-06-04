@@ -12,6 +12,15 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
+安装后会得到 4 个命令：
+
+```text
+mineru-batch-parse
+mineru-validate-outputs
+mineru-profile-documents
+mineru-build-structured-blocks
+```
+
 在 `.env` 中配置 MinerU token：
 
 ```text
@@ -35,7 +44,7 @@ docs/
 运行：
 
 ```bash
-.venv/bin/python mineru_batch_parse.py
+.venv/bin/mineru-batch-parse
 ```
 
 脚本会自动完成：
@@ -54,13 +63,13 @@ docs/
 只查看页数和分批范围，不上传文件：
 
 ```bash
-.venv/bin/python mineru_batch_parse.py --dry-run
+.venv/bin/mineru-batch-parse --dry-run
 ```
 
 ## 解析单个 PDF
 
 ```bash
-.venv/bin/python mineru_batch_parse.py \
+.venv/bin/mineru-batch-parse \
   --pdf docs/example.pdf \
   --out output/example
 ```
@@ -76,13 +85,13 @@ docs/
 只提交缺失任务，不等待解析完成：
 
 ```bash
-.venv/bin/python mineru_batch_parse.py --submit-only
+.venv/bin/mineru-batch-parse --submit-only
 ```
 
 重试失败任务：
 
 ```bash
-.venv/bin/python mineru_batch_parse.py --resubmit-failed
+.venv/bin/mineru-batch-parse --resubmit-failed
 ```
 
 ## MinerU 限流策略
@@ -107,7 +116,7 @@ docs/
 如果某个分块仍超过 200 MB，可以减小页数分块大小后重试：
 
 ```bash
-.venv/bin/python mineru_batch_parse.py --chunk-size 100 --resubmit-failed
+.venv/bin/mineru-batch-parse --chunk-size 100 --resubmit-failed
 ```
 
 ## 输出结构
@@ -147,7 +156,7 @@ output/骨伤科专病中医临床诊治/骨伤科专病中医临床诊治.md
 运行：
 
 ```bash
-.venv/bin/python validate_outputs.py
+.venv/bin/mineru-validate-outputs
 ```
 
 校验脚本会逐个输出目录检查：
@@ -170,7 +179,7 @@ MinerU 输出的 Markdown 是候选解析结果，不应直接等同于原文语
 生成文档画像和结构诊断：
 
 ```bash
-.venv/bin/python profile_documents.py
+.venv/bin/mineru-profile-documents
 ```
 
 该命令会生成：
@@ -186,7 +195,7 @@ output/<文档名>/quality_report.md
 生成结构化中间层和语义修复版 Markdown：
 
 ```bash
-.venv/bin/python build_structured_blocks.py
+.venv/bin/mineru-build-structured-blocks
 ```
 
 该命令会生成：
@@ -204,6 +213,8 @@ output/<文档名>/<文档名>.semantic.md
 
 ## 注意事项
 
+- 项目采用标准 `src/` 布局，核心代码在 `src/mineru_documents_markdown/`。
+- 顶层的 `mineru_batch_parse.py`、`validate_outputs.py`、`profile_documents.py`、`build_structured_blocks.py` 是兼容入口，旧命令仍可使用。
 - 默认推荐使用本地上传模式，也就是只传本地 PDF 路径。
 - `--url` 只适合单个公网 PDF URL。
 - 真正解析时会把 PDF 内容上传到 MinerU。只想查看分批范围时，请使用 `--dry-run`。
