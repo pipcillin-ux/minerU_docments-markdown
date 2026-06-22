@@ -17,13 +17,15 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
-This installs 4 CLI commands:
+This installs 6 CLI commands:
 
 ```text
 mineru-batch-parse
 mineru-validate-outputs
 mineru-profile-documents
 mineru-build-structured-blocks
+mineru-heading-quality
+mineru-run-pipeline
 ```
 
 Put your MinerU token in `.env`:
@@ -43,6 +45,73 @@ docs/
 ```
 
 By default, every `*.pdf` in `docs/` is processed.
+
+## One-Command Pipeline
+
+The formal command reads PDFs from `docs/`, writes outputs under `output/`, and
+runs parse, diagnostics, semantic rebuild, WARN repair, and final validation:
+
+```bash
+.venv/bin/mineru-run-pipeline \
+  --docs-dir docs \
+  --output-dir output \
+  --chunk-size 60 \
+  --resubmit-failed \
+  --repair-warn-with deepseek \
+  --fail-on warn
+```
+
+The pipeline runs:
+
+```text
+parse -> validate -> profile -> semantic rebuild -> heading quality
+      -> DeepSeek WARN review -> targeted rebuild -> final quality/validate
+```
+
+`--fail-on warn` enforces a final `0 FAIL / 0 WARN` target. Use
+`--fail-on fail` when WARN items should remain reviewable but non-blocking.
+DeepSeek WARN repair requires `DEEPSEEK_API_KEY` or `deepseek_api_key` in
+`.env` when WARN items need LLM review.
+
+If `output/` already contains parsed documents, rerun only diagnostics,
+semantic rebuild, repair, and validation:
+
+```bash
+.venv/bin/mineru-run-pipeline \
+  --docs-dir docs \
+  --output-dir output \
+  --skip-parse \
+  --repair-warn-with deepseek \
+  --fail-on warn
+```
+
+To reuse an existing review/override file during rebuild:
+
+```bash
+.venv/bin/mineru-run-pipeline \
+  --skip-parse \
+  --heading-review-overrides output/docs_warn_deepseek_review.json \
+  --skip-review
+```
+
+To avoid DeepSeek/OpenAI-compatible review calls and only run local rules:
+
+```bash
+.venv/bin/mineru-run-pipeline \
+  --docs-dir docs \
+  --output-dir output \
+  --skip-parse \
+  --repair-warn-with none \
+  --fail-on fail
+```
+
+DeepSeek review reads `DEEPSEEK_API_KEY` or `deepseek_api_key` from the
+environment or `.env`. It writes review overrides to:
+
+```text
+output/heading_warn_deepseek_review.json
+output/heading_warn_deepseek_review.md
+```
 
 ## Batch Parse All PDFs
 
@@ -211,6 +280,10 @@ Build structured blocks and semantic Markdown:
 This writes:
 
 ```text
+output/<document-name>/toc_tree.json
+output/<document-name>/heading_candidates.jsonl
+output/<document-name>/heading_decisions.jsonl
+output/<document-name>/heading_diagnostics.json
 output/<document-name>/structured_blocks.jsonl
 output/<document-name>/<document-name>.semantic.md
 ```
@@ -218,9 +291,117 @@ output/<document-name>/<document-name>.semantic.md
 Recommended usage:
 
 - `<document-name>.md`: original merged MinerU Markdown for traceability.
-- `<document-name>.semantic.md`: rule-rebuilt structure for RAG and extraction.
+- `<document-name>.semantic.md`: rebuilt full-document structure. By default it
+  preserves front matter, body, references, and appendices, and only drops
+  repeated noise such as headers, footers, and page numbers.
 - `structured_blocks.jsonl`: machine-readable blocks with page, chunk, type,
-  heading level, section path, bbox, table, and image metadata.
+  heading level, section path, bbox, table, image metadata, and heading decision
+  audit fields. The `recommended_for_rag` field marks body blocks that are
+  better suited for RAG.
+- `toc_tree.json`: best-effort table-of-contents tree with parent paths and
+  page hints.
+- `heading_candidates.jsonl`: local heading candidates with layout and text
+  signals.
+- `heading_decisions.jsonl`: audited heading repair decisions. Actions include
+  `keep_heading`, `promote_to_heading`, `demote_to_paragraph`, and
+  `split_heading`.
+- `heading_diagnostics.json`: semantic heading quality metrics.
+
+### Current Structure Repairs
+
+The semantic rebuild now handles the main structure-drift cases explicitly:
+
+- TOC boundaries: items are classified as `front_matter`, `toc`, `body`, or
+  `back_matter`. TOC regions are rendered as plain `**目录**` blocks instead of
+  Markdown headings, and TOC blocks are not recommended for RAG body chunks.
+- Heading levels: `toc_tree.json` and numbering patterns drive level inference.
+  Same-pattern sibling headings are checked for consistency so one logical
+  level does not drift between H1/H2/H3.
+- Broken headings: split chapter titles can be conservatively merged, while
+  glued "heading + prose" or "heading + table/figure reference tail" text is
+  split back into heading and body content.
+- Non-heading demotion: index-like TOC rows, CIP/cataloging lines, references,
+  numeric chart/OCR fragments, table/figure reference tails, and review
+  questions are excluded from body heading-level decisions.
+- Quality gates: `mineru-heading-quality` checks TOC leakage, TOC entries in the
+  body outline, heading-level jumps, and same-pattern sibling inconsistencies.
+  The current repository target is `0 FAIL / 0 WARN` across the full corpus.
+
+To build body-only semantic Markdown:
+
+```bash
+.venv/bin/mineru-build-structured-blocks --semantic-scope body
+```
+
+Heading strategy options:
+
+```bash
+# Local-only and reproducible. This is the default.
+.venv/bin/mineru-build-structured-blocks --heading-strategy rule
+
+# Send every heading candidate to an OpenAI-compatible LLM.
+.venv/bin/mineru-build-structured-blocks --heading-strategy llm
+
+# Use rules for high-confidence candidates and LLM for low-confidence ones.
+.venv/bin/mineru-build-structured-blocks --heading-strategy hybrid
+```
+
+DeepSeek can be used as the optional LLM assist layer:
+
+```bash
+export DEEPSEEK_API_KEY="..."
+export DEEPSEEK_BASE_URL="https://api.deepseek.com"
+export DEEPSEEK_MODEL="deepseek-chat"
+.venv/bin/mineru-build-structured-blocks --heading-strategy hybrid
+```
+
+The LLM is only given heading candidates plus small local context windows. It is
+not asked to rewrite the full document. If the API key is missing, times out, or
+returns invalid JSON, the builder falls back to local rule decisions.
+
+For large documents, keep requests small:
+
+```bash
+.venv/bin/mineru-build-structured-blocks \
+  --heading-strategy hybrid \
+  --llm-confidence-threshold 0.6 \
+  --llm-batch-size 5
+```
+
+Run hardened heading quality checks:
+
+```bash
+.venv/bin/mineru-heading-quality
+```
+
+Quality status meanings:
+
+- `FAIL`: definite structural defects, such as stuck TOC headings, missing
+  semantic headings, or broken decision JSON. Strict pipelines should stop.
+- `WARN`: structural risks that need review, such as sentence-like headings,
+  sibling level inconsistencies, or heading level jumps. These are good targets
+  for DeepSeek/hybrid review or manual spot checks.
+- `INFO`: non-blocking audit notes, such as TOC nodes not found in body
+  headings.
+
+This writes:
+
+```text
+output/heading_quality_summary.csv
+output/<document-name>/heading_quality.json
+output/<document-name>/heading_quality.md
+```
+
+Use the formal pipeline for a stricter workflow:
+
+```bash
+.venv/bin/mineru-run-pipeline \
+  --skip-parse \
+  --heading-strategy hybrid \
+  --llm-confidence-threshold 0.6 \
+  --llm-batch-size 5 \
+  --fail-on fail
+```
 
 ## Notes
 

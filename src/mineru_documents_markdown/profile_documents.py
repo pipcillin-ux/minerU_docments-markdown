@@ -67,6 +67,16 @@ def heading_diagnostics(out_dir: Path) -> dict[str, Any]:
     }
 
 
+def semantic_heading_diagnostics(out_dir: Path) -> dict[str, Any]:
+    path = out_dir / "heading_diagnostics.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {"heading_diagnostics_error": "invalid heading_diagnostics.json"}
+
+
 def profile_output_dir(out_dir: Path) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
     tasks = load_tasks(out_dir)
     item_counts: Counter[str] = Counter()
@@ -129,10 +139,12 @@ def profile_output_dir(out_dir: Path) -> tuple[dict[str, Any], dict[str, Any], l
     low_content_pages = [page for page in range(1, total_pages + 1) if page_counts.get(page, 0) <= 2]
     repeated_margins = sorted(repeated_margin_texts(out_dir))
     headings = heading_diagnostics(out_dir)
+    semantic_headings = semantic_heading_diagnostics(out_dir)
     md_path = markdown_file(out_dir)
 
     diagnostics: dict[str, Any] = {
         **headings,
+        "semantic_heading_diagnostics": semantic_headings,
         "range_issues": range_issues,
         "repeated_margin_text_count": len(repeated_margins),
         "repeated_margin_text_samples": repeated_margins[:20],
@@ -161,6 +173,10 @@ def profile_output_dir(out_dir: Path) -> tuple[dict[str, Any], dict[str, Any], l
         issues.append("image/table candidates need human review")
     if item_counts.get("table", 0) == 0 and len(image_pages) > 20:
         issues.append("no structured table blocks but many images; tables may be image-only")
+    if semantic_headings.get("h1_subsection_samples"):
+        issues.append("semantic headings include subsection-like H1 entries")
+    if semantic_headings.get("long_heading_samples"):
+        issues.append("semantic headings include long or sentence-like heading candidates")
 
     risk = "OK"
     if issues:
@@ -202,6 +218,10 @@ def write_quality_report(out_dir: Path, profile: dict[str, Any], diagnostics: di
         f"- 疑似图片型表格：{diagnostics['image_table_candidate_count']}",
         f"- 标题数量：{diagnostics['heading_count']}",
         f"- H1 占比：{diagnostics['first_level_ratio']}",
+        f"- 语义标题候选：{diagnostics['semantic_heading_diagnostics'].get('heading_candidate_count', 0)}",
+        f"- 目录树节点：{diagnostics['semantic_heading_diagnostics'].get('toc_node_count', 0)}",
+        f"- 标题决策：{diagnostics['semantic_heading_diagnostics'].get('decision_count', 0)}",
+        f"- 标题切分：{diagnostics['semantic_heading_diagnostics'].get('split_heading_count', 0)}",
         "",
         "## 问题",
         "",
@@ -256,6 +276,10 @@ def main() -> int:
                 "images": profile["item_counts"].get("image", 0),
                 "headings": diagnostics["heading_count"],
                 "h1_ratio": diagnostics["first_level_ratio"],
+                "toc_nodes": diagnostics["semantic_heading_diagnostics"].get("toc_node_count", 0),
+                "heading_candidates": diagnostics["semantic_heading_diagnostics"].get("heading_candidate_count", 0),
+                "heading_decisions": diagnostics["semantic_heading_diagnostics"].get("decision_count", 0),
+                "split_headings": diagnostics["semantic_heading_diagnostics"].get("split_heading_count", 0),
                 "issues": "; ".join(issues),
             }
         )

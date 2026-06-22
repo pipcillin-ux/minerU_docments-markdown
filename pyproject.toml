@@ -17,6 +17,8 @@ mineru-batch-parse = "mineru_documents_markdown.mineru_batch_parse:main"
 mineru-validate-outputs = "mineru_documents_markdown.validate_outputs:main"
 mineru-profile-documents = "mineru_documents_markdown.profile_documents:main"
 mineru-build-structured-blocks = "mineru_documents_markdown.build_structured_blocks:main"
+mineru-heading-quality = "mineru_documents_markdown.heading_quality:main"
+mineru-run-pipeline = "mineru_documents_markdown.run_pipeline:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

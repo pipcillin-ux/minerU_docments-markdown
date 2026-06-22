@@ -11,6 +11,7 @@ from typing import Any, Iterable
 
 
 BODY_SECTION_TITLES = {
+    "概述",
     "病因病机",
     "临床表现",
     "实验室和其他辅助检查",
@@ -25,6 +26,8 @@ BODY_SECTION_TITLES = {
     "预防与调护",
     "现代研究",
     "评述与展望",
+    "循证参考",
+    "手术治疗与围手术期处理",
 }
 
 FRONT_MATTER_PATTERNS = (
@@ -112,11 +115,36 @@ def compact_heading_text(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
+def strip_toc_page_number(text: str) -> str:
+    text = normalize_text(text)
+    text = re.sub(r"[.．。·•…\s]+", " ", text).strip()
+    text = re.sub(r"\s+\d{1,4}\s*$", "", text).strip()
+    compact = re.sub(r"\s+", "", text)
+    for title in sorted(BODY_SECTION_TITLES, key=len, reverse=True):
+        key = compact_heading_text(title)
+        if compact.startswith(key) and compact[len(key) :].isdigit():
+            return title
+    match = re.match(r"^([（(][一二三四五六七八九十百\d]+[）)].*?)(\d{1,4})$", compact)
+    if match:
+        return match.group(1)
+    return text
+
+
+def heading_key(text: str) -> str:
+    text = strip_toc_page_number(text)
+    text = text.replace("(", "（").replace(")", "）")
+    return compact_heading_text(text)
+
+
 def markdown_file(out_dir: Path) -> Path | None:
+    excluded_names = {
+        "quality_report.md",
+        "heading_quality.md",
+    }
     candidates = sorted(
         path
         for path in out_dir.glob("*.md")
-        if not path.name.endswith(".semantic.md") and path.name != "quality_report.md"
+        if not path.name.endswith(".semantic.md") and path.name not in excluded_names
     )
     return candidates[0] if candidates else None
 
@@ -135,13 +163,206 @@ def markdown_headings(out_dir: Path) -> list[tuple[int, str]]:
 
 def looks_like_toc_text(text: str) -> bool:
     clean = normalize_text(text)
-    if clean == "目录" or clean.endswith("目录"):
+    if clean == "目录" or (clean.endswith("目录") and len(clean) <= 8):
         return True
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if len(lines) >= 3:
         numbered = sum(1 for line in lines if re.search(r"\s\d{1,4}$", line))
         return numbered / len(lines) >= 0.45
     return bool(re.search(r".{2,30}\s+\d{1,4}$", clean))
+
+
+def reference_caption_like(text: str) -> bool:
+    clean = normalize_text(text)
+    return bool(re.search(r"见[表图]\s*\d{1,4}(?:\s*[-－—]\s*\d{1,4})?[。.]?$", clean))
+
+
+def figure_table_reference_tail(text: str) -> bool:
+    clean = normalize_text(text)
+    return bool(re.search(r"[（(]?[图表]\s*\d{1,4}(?:\s*[-－—]\s*\d{1,4})?[）)]?[：:]?$", clean))
+
+
+def numeric_index_like(text: str) -> bool:
+    clean = normalize_text(text)
+    compact = re.sub(r"\s+", "", clean).replace("（", "(").replace("）", ")")
+    return bool(re.fullmatch(r"(?:\(\d{1,4}\)\d{1,4}){2,}", compact))
+
+
+def short_index_entry_like(text: str) -> bool:
+    clean = normalize_text(text)
+    if re.fullmatch(r"病案\s*\d{1,2}", clean):
+        return False
+    return bool(re.fullmatch(r"[\u4e00-\u9fffA-Za-z（）()·•]{1,16}\s+\d{1,4}", clean))
+
+
+def cataloging_entry_like(text: str) -> bool:
+    clean = normalize_text(text)
+    roman_markers = len(re.findall(r"\b[IVX]{1,4}\.", clean))
+    return roman_markers >= 2 and ("①" in clean or re.search(r"\bR\d", clean))
+
+
+def digit_axis_like(text: str) -> bool:
+    clean = normalize_text(text)
+    return bool(re.search(r"(?:^|\s)0\s+1\s+2\s+3(?:\s+4)?", clean))
+
+
+def reference_entry_like(text: str) -> bool:
+    clean = normalize_text(text)
+    if not re.match(r"^\d+[.．、]\s+", clean):
+        return False
+    return bool(
+        re.search(r"\[[A-Z]\]", clean)
+        or re.search(r"\b(?:19|20)\d{2}[，,]\s*\d", clean)
+        or re.search(r"\b(?:19|20)\d{2}[，,]\s*\d+[(（]\d+[)）]", clean)
+    )
+
+
+def non_heading_line_like(text: str) -> bool:
+    return (
+        reference_caption_like(text)
+        or numeric_index_like(text)
+        or short_index_entry_like(text)
+        or cataloging_entry_like(text)
+        or digit_axis_like(text)
+        or reference_entry_like(text)
+    )
+
+
+def looks_like_toc_entry(text: str) -> bool:
+    clean = normalize_text(text)
+    if not clean or clean == "目录":
+        return False
+    if not re.search(r"[\u4e00-\u9fff]", clean):
+        return False
+    if re.fullmatch(r"病案\s*\d{1,2}", clean):
+        return False
+    if reference_caption_like(clean) or figure_table_reference_tail(clean):
+        return False
+    if cataloging_entry_like(clean) or digit_axis_like(clean) or reference_entry_like(clean):
+        return False
+    if looks_like_toc_text(clean):
+        return True
+    return bool(re.search(r".{1,60}(?:…+|\.{2,}|[.．。·•])\s*\d{1,4}$", clean))
+
+
+def item_region_key(wrapped: dict[str, Any]) -> tuple[int, int, int]:
+    return (
+        int(wrapped["task_index"]),
+        int(wrapped["absolute_page"]),
+        int(wrapped["item_index"]),
+    )
+
+
+def is_margin_item(item: dict[str, Any]) -> bool:
+    return str(item.get("type") or "") in {"header", "footer", "page_number"}
+
+
+def is_body_paragraph_text(text: str) -> bool:
+    clean = normalize_text(text)
+    return len(clean) >= 35 and bool(re.search(r"[，,。；;]", clean))
+
+
+def has_body_text_after(wrapped_items: list[dict[str, Any]], index: int, window: int = 12) -> bool:
+    inspected = 0
+    for wrapped in wrapped_items[index + 1 :]:
+        if inspected >= window:
+            break
+        item = wrapped["item"]
+        if is_margin_item(item):
+            continue
+        text = normalize_text(item_text(item))
+        if not text:
+            continue
+        inspected += 1
+        if text == "目录" or looks_like_toc_entry(text):
+            return False
+        if is_body_paragraph_text(text):
+            return True
+        if str(item.get("type") or "") in {"table", "image"}:
+            return True
+    return False
+
+
+def is_body_start_heading(text: str) -> bool:
+    clean = normalize_text(text)
+    if not clean or clean == "目录" or looks_like_toc_entry(clean):
+        return False
+    if clean in {"绪论", "导论", "概论", "总论"}:
+        return True
+    if re.match(r"^第[一二三四五六七八九十百千万\d]+[章节篇编部卷]", clean):
+        return True
+    if re.match(r"^[上中下][篇编部卷]\s*\S{0,30}$", clean):
+        return True
+    return False
+
+
+def classify_item_regions(wrapped_items: list[dict[str, Any]]) -> dict[tuple[int, int, int], str]:
+    pages: dict[int, list[str]] = {}
+    for wrapped in wrapped_items:
+        text = normalize_text(item_text(wrapped["item"]))
+        if text:
+            pages.setdefault(int(wrapped["absolute_page"]), []).append(text)
+    max_page = max(pages) if pages else 0
+
+    toc_start: int | None = None
+    for index, wrapped in enumerate(wrapped_items):
+        page = int(wrapped["absolute_page"])
+        if page > 50:
+            break
+        item = wrapped["item"]
+        if is_margin_item(item):
+            continue
+        text = normalize_text(item_text(item))
+        if text == "目录":
+            toc_start = index
+            break
+    if toc_start is None:
+        for index, wrapped in enumerate(wrapped_items):
+            page = int(wrapped["absolute_page"])
+            if page > 50:
+                break
+            item = wrapped["item"]
+            if is_margin_item(item):
+                continue
+            text = normalize_text(item_text(item))
+            if looks_like_toc_entry(text):
+                toc_start = index
+                break
+
+    body_start: int | None = None
+    if toc_start is not None:
+        for index in range(toc_start + 1, len(wrapped_items)):
+            wrapped = wrapped_items[index]
+            page = int(wrapped["absolute_page"])
+            if page > 80:
+                break
+            item = wrapped["item"]
+            if is_margin_item(item):
+                continue
+            text = normalize_text(item_text(item))
+            if is_body_start_heading(text) and has_body_text_after(wrapped_items, index):
+                body_start = index
+                break
+
+    regions: dict[tuple[int, int, int], str] = {}
+    for index, wrapped in enumerate(wrapped_items):
+        page = int(wrapped["absolute_page"])
+        key = item_region_key(wrapped)
+        joined = " ".join(pages.get(page, [])[:40])
+        if toc_start is not None and index >= toc_start and (body_start is None or index < body_start):
+            regions[key] = "toc"
+        elif body_start is not None and index >= body_start:
+            if page >= int(max_page * 0.75) and any(pattern in joined for pattern in BACK_MATTER_PATTERNS):
+                regions[key] = "back_matter"
+            else:
+                regions[key] = "body"
+        elif page <= 15 and any(pattern in joined for pattern in FRONT_MATTER_PATTERNS):
+            regions[key] = "front_matter"
+        elif page >= int(max_page * 0.75) and any(pattern in joined for pattern in BACK_MATTER_PATTERNS):
+            regions[key] = "back_matter"
+        else:
+            regions[key] = "body"
+    return regions
 
 
 def page_texts(out_dir: Path) -> dict[int, list[str]]:
@@ -180,7 +401,7 @@ def repeated_margin_texts(out_dir: Path, min_repeats: int = 3) -> set[str]:
     counts: Counter[str] = Counter()
     for wrapped in iter_content_items(out_dir):
         item = wrapped["item"]
-        if item.get("type") not in {"header", "footer", "page_number"}:
+        if item.get("type") not in {"header", "footer", "page_number", "aside_text"}:
             continue
         text = normalize_text(item_text(item))
         if text:
@@ -203,16 +424,85 @@ def image_caption(item: dict[str, Any]) -> str:
 
 
 def is_probable_body_section(text: str) -> bool:
-    clean = compact_heading_text(text)
-    return clean in {compact_heading_text(value) for value in BODY_SECTION_TITLES}
+    clean = heading_key(text)
+    return clean in {heading_key(value) for value in BODY_SECTION_TITLES}
+
+
+def is_probable_numbered_subsection(text: str) -> bool:
+    raw = normalize_text(text)
+    if re.search(r"[，,。；;！？!?：:]", raw):
+        return False
+    clean = heading_key(text)
+    if not clean or len(clean) > 28:
+        return False
+    return bool(
+        re.match(r"^[（(][一二三四五六七八九十百\d]+[）)]", clean)
+        or re.match(r"^[一二三四五六七八九十百\d]+[）)]", clean)
+    )
+
+
+def heading_level_from_text(text: str, toc_levels: dict[str, int] | None = None) -> int | None:
+    clean = normalize_text(text)
+    key = heading_key(clean)
+    if toc_levels and key in toc_levels:
+        return toc_levels[key]
+    if clean in {"绪论", "导论", "概论", "总论"}:
+        return 1
+    if re.match(r"^第[一二三四五六七八九十百千万\d]+[章篇编部卷]", clean):
+        return 1
+    if re.match(r"^[上中下][篇编部卷]\s*\S{0,30}$", clean):
+        return 1
+    if re.match(r"^第[一二三四五六七八九十百千万\d]+节", clean):
+        return 2
+    if re.match(r"^[一二三四五六七八九十百]+[、.．]\s*\S+", clean):
+        return 2
+    if re.match(r"^[（(][一二三四五六七八九十百\d]+[）)]\s*\S+", clean):
+        return 3
+    match = re.match(r"^(\d+(?:\.\d+)*)(?:[.．、]\s*)\S+", clean)
+    if match:
+        return min(4 + match.group(1).count("."), 6)
+    return None
+
+
+def toc_heading_levels(out_dir: Path) -> dict[str, int]:
+    regions = classify_page_regions(out_dir)
+    levels: dict[str, int] = {}
+    for wrapped in iter_content_items(out_dir):
+        page = int(wrapped["absolute_page"])
+        if page > 50 or regions.get(page) != "front_matter":
+            continue
+        text = item_text(wrapped["item"])
+        for line in text.splitlines():
+            title = strip_toc_page_number(line)
+            key = heading_key(title)
+            if not key or key in {"目录"}:
+                continue
+            if is_probable_body_section(title):
+                levels.setdefault(key, 2)
+            elif is_probable_numbered_subsection(title):
+                levels.setdefault(key, 3)
+            elif looks_like_toc_text(line) and is_probable_major_heading(title):
+                levels.setdefault(key, 1)
+    return levels
 
 
 def is_probable_major_heading(text: str) -> bool:
-    clean = compact_heading_text(text)
+    raw = normalize_text(text)
+    if re.search(r"[，,。；;：:]", raw):
+        return False
+    clean = heading_key(text)
     if not clean or len(clean) > 26:
         return False
     if is_probable_body_section(text):
         return False
+    if is_probable_numbered_subsection(text):
+        return False
+    if looks_like_toc_text(text):
+        return False
     if clean in {"目录", "前言", "编写说明"}:
         return False
+    if clean in {"绪论", "导论", "概论", "总论"}:
+        return True
+    if re.match(r"^第[一二三四五六七八九十百千万\d]+[章篇编部卷]", raw):
+        return True
     return any(keyword in clean for keyword in ("病", "症", "骨折", "脱位", "损伤", "综合征", "炎", "癌", "瘤"))

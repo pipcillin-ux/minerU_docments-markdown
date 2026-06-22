@@ -12,13 +12,15 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
-安装后会得到 4 个命令：
+安装后会得到 6 个命令：
 
 ```text
 mineru-batch-parse
 mineru-validate-outputs
 mineru-profile-documents
 mineru-build-structured-blocks
+mineru-heading-quality
+mineru-run-pipeline
 ```
 
 在 `.env` 中配置 MinerU token：
@@ -38,6 +40,71 @@ docs/
 ```
 
 默认情况下，脚本会处理 `docs/` 下所有 `*.pdf` 文件。
+
+## 一条命令跑完全流程
+
+正式推荐命令会从 `docs/` 读取 PDF，写入 `output/`，并串起解析、诊断、
+语义重建、WARN 修复和最终校验：
+
+```bash
+.venv/bin/mineru-run-pipeline \
+  --docs-dir docs \
+  --output-dir output \
+  --chunk-size 60 \
+  --resubmit-failed \
+  --repair-warn-with deepseek \
+  --fail-on warn
+```
+
+流水线顺序：
+
+```text
+解析 -> 输出校验 -> 文档画像/结构诊断 -> 语义重建 -> 标题质量检查
+     -> DeepSeek 复核 WARN -> 定向重建 -> 最终质量检查/输出校验
+```
+
+`--fail-on warn` 用于把最终目标收紧到 `0 FAIL / 0 WARN`；如果只希望
+阻断明确错误、允许保留 WARN，可改成 `--fail-on fail`。DeepSeek WARN
+修复默认需要 `DEEPSEEK_API_KEY` 或 `.env` 中的 `deepseek_api_key`。
+
+如果 `output/` 已经有解析结果，只想复跑诊断、语义重建和修复：
+
+```bash
+.venv/bin/mineru-run-pipeline \
+  --docs-dir docs \
+  --output-dir output \
+  --skip-parse \
+  --repair-warn-with deepseek \
+  --fail-on warn
+```
+
+如果要复用已有的 review/override 文件：
+
+```bash
+.venv/bin/mineru-run-pipeline \
+  --skip-parse \
+  --heading-review-overrides output/docs_warn_deepseek_review.json \
+  --skip-review
+```
+
+如果不想调用 DeepSeek/OpenAI-compatible 复核，只使用本地规则：
+
+```bash
+.venv/bin/mineru-run-pipeline \
+  --docs-dir docs \
+  --output-dir output \
+  --skip-parse \
+  --repair-warn-with none \
+  --fail-on fail
+```
+
+DeepSeek 复核会从环境变量或 `.env` 读取 `DEEPSEEK_API_KEY` /
+`deepseek_api_key`，并输出：
+
+```text
+output/heading_warn_deepseek_review.json
+output/heading_warn_deepseek_review.md
+```
 
 ## 批量解析所有 PDF
 
@@ -201,6 +268,10 @@ output/<文档名>/quality_report.md
 该命令会生成：
 
 ```text
+output/<文档名>/toc_tree.json
+output/<文档名>/heading_candidates.jsonl
+output/<文档名>/heading_decisions.jsonl
+output/<文档名>/heading_diagnostics.json
 output/<文档名>/structured_blocks.jsonl
 output/<文档名>/<文档名>.semantic.md
 ```
@@ -208,8 +279,92 @@ output/<文档名>/<文档名>.semantic.md
 建议使用方式：
 
 - `<文档名>.md`：保留 MinerU 原始合并版，用于溯源。
-- `<文档名>.semantic.md`：规则修复后的结构版，用于 RAG、切块和知识抽取。
-- `structured_blocks.jsonl`：机器可读结构化中间层，包含页码、分块、块类型、标题层级、章节路径、bbox、表格、图片等信息。
+- `<文档名>.semantic.md`：结构修复后的全文语义版，默认保留前置页、正文、参考文献和附录，只去掉页眉、页脚、页码等重复噪声。
+- `structured_blocks.jsonl`：机器可读结构化中间层，包含页码、分块、块类型、标题层级、章节路径、bbox、表格、图片、标题决策审计等信息，并用 `recommended_for_rag` 标记更适合进入 RAG 的正文块。
+- `toc_tree.json`：从目录页抽取的目录树，包含父路径和页码提示。
+- `heading_candidates.jsonl`：本地标题候选，包含文本、版面和上下文信号。
+- `heading_decisions.jsonl`：标题修复决策记录，支持 `keep_heading`、`promote_to_heading`、`demote_to_paragraph`、`split_heading`。
+- `heading_diagnostics.json`：语义标题结构质检指标。
+
+### 当前结构修复规则
+
+近期优化后的语义重建会显式处理结构偏移问题：
+
+- 目录边界：按 item 级别识别 `front_matter`、`toc`、`body`、`back_matter`，目录区渲染为普通 `**目录**` 区块，不再把目录条目写成 Markdown 标题；目录块默认不进入 RAG 正文分块。
+- 标题层级：优先使用 `toc_tree.json` 和编号模式推断层级，正文同模式兄弟标题会做一致性检查，避免同一层级一会儿变成一级标题、一会儿变成三级标题。
+- 断行标题：支持保守合并被拆断的章节标题，并把“标题 + 正文句子”“标题 + 图表引用尾巴”等粘连文本拆回标题和正文。
+- 非标题降级：目录索引、CIP/编目行、参考文献条目、坐标轴/OCR 数字串、图表说明尾巴、复习题问句等不再参与正文标题层级判断。
+- 质量门控：`mineru-heading-quality` 会检查 TOC 泄漏、目录项进入正文大纲、标题层级跳跃、同模式兄弟标题不一致等问题；本仓库当前全量输出目标是 `0 FAIL / 0 WARN`。
+
+如果只想生成正文范围的结构版 Markdown，可以使用：
+
+```bash
+.venv/bin/mineru-build-structured-blocks --semantic-scope body
+```
+
+标题识别策略：
+
+```bash
+# 只用本地规则，默认模式，可复现。
+.venv/bin/mineru-build-structured-blocks --heading-strategy rule
+
+# 所有标题候选都交给 OpenAI-compatible 大模型判断。
+.venv/bin/mineru-build-structured-blocks --heading-strategy llm
+
+# 高置信候选用规则，低置信候选交给大模型，推荐增强模式。
+.venv/bin/mineru-build-structured-blocks --heading-strategy hybrid
+```
+
+DeepSeek 可以作为可选的大模型辅助层：
+
+```bash
+export DEEPSEEK_API_KEY="..."
+export DEEPSEEK_BASE_URL="https://api.deepseek.com"
+export DEEPSEEK_MODEL="deepseek-chat"
+.venv/bin/mineru-build-structured-blocks --heading-strategy hybrid
+```
+
+大模型只会收到标题候选和少量局部上下文，不会被要求重写整本文档。如果没有配置 API Key、请求超时或返回 JSON 不合法，程序会回退到本地规则决策。
+
+大文档建议控制单次请求大小：
+
+```bash
+.venv/bin/mineru-build-structured-blocks \
+  --heading-strategy hybrid \
+  --llm-confidence-threshold 0.6 \
+  --llm-batch-size 5
+```
+
+运行固化后的标题质量检查：
+
+```bash
+.venv/bin/mineru-heading-quality
+```
+
+质量状态含义：
+
+- `FAIL`：发现明确结构错误，例如目录项仍然粘连、无语义标题、标题决策文件损坏，固定流水线应阻断。
+- `WARN`：发现需要抽查的结构风险，例如长句式标题、同级标题层级不一致、标题层级跳跃，可交给 DeepSeek/hybrid 模式或人工复核。
+- `INFO`：提示性信息，例如目录节点未在正文标题中匹配，通常不阻断流程。
+
+该命令会生成：
+
+```text
+output/heading_quality_summary.csv
+output/<文档名>/heading_quality.json
+output/<文档名>/heading_quality.md
+```
+
+更严格的固定流水线建议直接使用正式命令：
+
+```bash
+.venv/bin/mineru-run-pipeline \
+  --skip-parse \
+  --heading-strategy hybrid \
+  --llm-confidence-threshold 0.6 \
+  --llm-batch-size 5 \
+  --fail-on fail
+```
 
 ## 注意事项
 
