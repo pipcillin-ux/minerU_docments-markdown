@@ -293,6 +293,8 @@ def is_body_start_heading(text: str) -> bool:
         return True
     if re.match(r"^[上中下][篇编部卷]\s*\S{0,30}$", clean):
         return True
+    if is_probable_major_heading(clean):
+        return True
     return False
 
 
@@ -439,6 +441,37 @@ def is_probable_numbered_subsection(text: str) -> bool:
         re.match(r"^[（(][一二三四五六七八九十百\d]+[）)]", clean)
         or re.match(r"^[一二三四五六七八九十百\d]+[）)]", clean)
     )
+
+
+def is_numbered_prose_fragment(text: str) -> bool:
+    raw = normalize_text(text)
+    if not re.match(r"^(?:\d+[.．、]|[（(][一二三四五六七八九十百\d]+[）)])\s*\S+", raw):
+        return False
+    if len(raw) < 32:
+        return False
+    has_punctuation = bool(re.search(r"[，,。；;：:]", raw))
+    if len(raw) > 70 and has_punctuation:
+        return True
+    prose_cues = (
+        "根据",
+        "认为",
+        "患者",
+        "符合",
+        "可将",
+        "除了",
+        "同时",
+        "下述",
+        "以下",
+        "上表",
+        "诊断",
+        "分级",
+        "临床上",
+        "治疗本病",
+        "本病的",
+    )
+    if has_punctuation and any(cue in raw for cue in prose_cues):
+        return True
+    return bool(has_punctuation and re.search(r"将.{0,16}分为", raw))
 
 
 def heading_level_from_text(text: str, toc_levels: dict[str, int] | None = None) -> int | None:

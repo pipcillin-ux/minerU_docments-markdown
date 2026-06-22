@@ -584,6 +584,60 @@ def check_section_tree(section_payload: dict[str, Any], blocks: list[dict[str, A
                 break
             parent_id = str(parent.get("parent_id") or "")
 
+    first_tree_page: int | None = None
+    for node in nodes:
+        start_page = node.get("start_page")
+        if isinstance(start_page, int):
+            first_tree_page = start_page if first_tree_page is None else min(first_tree_page, start_page)
+
+    for index, block in enumerate(blocks):
+        if block.get("region") != "body" or block.get("include_in_semantic") is False:
+            continue
+        if first_tree_index is not None and index < first_tree_index:
+            continue
+        page = block.get("page")
+        if first_tree_index is None and isinstance(page, int) and isinstance(first_tree_page, int) and page < first_tree_page:
+            continue
+        section_id = str(block.get("section_id") or "")
+        block_id = str(block.get("block_id") or "")
+        if not section_id:
+            issues.append(
+                HeadingIssue(
+                    code="body_block_without_section",
+                    severity="FAIL",
+                    message="Body block was not attached to a section tree node.",
+                    page=block.get("page"),
+                    text=str(block.get("text") or "")[:180],
+                    block_id=block_id,
+                    suggestion="Attach body blocks to the deepest section_tree node covering their block/page range.",
+                )
+            )
+            continue
+        if section_id not in ids:
+            issues.append(
+                HeadingIssue(
+                    code="body_block_invalid_section_id",
+                    severity="FAIL",
+                    message="Body block references a section_id not present in section_tree.json.",
+                    page=block.get("page"),
+                    text=str(block.get("text") or "")[:180],
+                    block_id=block_id,
+                    suggestion="Reattach structured blocks after rebuilding section_tree.json.",
+                )
+            )
+        if not block.get("tree_section_path"):
+            issues.append(
+                HeadingIssue(
+                    code="body_block_empty_tree_path",
+                    severity="FAIL",
+                    message="Body block has a section_id but no tree_section_path.",
+                    page=block.get("page"),
+                    text=str(block.get("text") or "")[:180],
+                    block_id=block_id,
+                    suggestion="Copy the matched section node path into tree_section_path.",
+                )
+            )
+
     if tree_source == "body_headings":
         section_source_blocks = {str(node.get("source_block_id") or "") for node in nodes}
         for block in body_headings:

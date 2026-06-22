@@ -64,7 +64,7 @@ runs parse, diagnostics, semantic rebuild, WARN repair, and final validation:
 The pipeline runs:
 
 ```text
-parse -> validate -> profile -> semantic rebuild -> heading quality
+parse -> validate -> profile -> semantic rebuild / section-tree assignment -> heading quality
       -> DeepSeek WARN review -> targeted rebuild -> final quality/validate
 ```
 
@@ -296,15 +296,19 @@ Recommended usage:
   preserves front matter, body, references, and appendices, and only drops
   repeated noise such as headers, footers, and page numbers.
 - `structured_blocks.jsonl`: machine-readable blocks with page, chunk, type,
-  heading level, section path, bbox, table, image metadata, and heading decision
-  audit fields. The `recommended_for_rag` field marks body blocks that are
-  better suited for RAG.
+  heading level, legacy section path, section tree fields, bbox, table, image
+  metadata, and heading decision audit fields. The `section_id`,
+  `tree_section_path`, `tree_heading_level`, `tree_section_source`, and
+  `tree_section_confidence` fields attach body blocks to the reconstructed
+  tree. The `recommended_for_rag` field marks body blocks that are better
+  suited for RAG.
 - `toc_tree.json`: best-effort table-of-contents tree with parent paths and
   page hints.
 - `section_tree.json`: sidecar body section tree. It prefers body headings for
   parent/child recovery and falls back to the TOC backbone when body headings
-  are too sparse. Later phases can use it as the authoritative source for
-  Markdown heading levels and RAG chunk paths.
+  are too sparse. It is used to attach each body block to a stable section path;
+  later phases can use it as the authoritative source for Markdown heading
+  levels.
 - `heading_candidates.jsonl`: local heading candidates with layout and text
   signals.
 - `heading_decisions.jsonl`: audited heading repair decisions. Actions include
@@ -323,14 +327,16 @@ The semantic rebuild now handles the main structure-drift cases explicitly:
   Same-pattern sibling headings are checked for consistency so one logical
   level does not drift between H1/H2/H3.
 - Section tree: `section_tree.json` records the long-term body parent/child
-  structure. In the current phase it is a sidecar quality-gated artifact and
-  does not change `.semantic.md` heading rendering yet.
+  structure and `structured_blocks.jsonl` is backfilled with tree assignment
+  fields. The current phase still leaves `.semantic.md` heading rendering
+  unchanged.
 - Broken headings: split chapter titles can be conservatively merged, while
   glued "heading + prose" or "heading + table/figure reference tail" text is
   split back into heading and body content.
 - Non-heading demotion: index-like TOC rows, CIP/cataloging lines, references,
-  numeric chart/OCR fragments, table/figure reference tails, and review
-  questions are excluded from body heading-level decisions.
+  numeric chart/OCR fragments, table/figure reference tails, review questions,
+  and long numbered prose/list items are excluded from body heading-level
+  decisions.
 - Quality gates: `mineru-heading-quality` checks TOC leakage, TOC entries in the
   body outline, heading-level jumps, and same-pattern sibling inconsistencies.
   The current repository target is `0 FAIL / 0 WARN` across the full corpus.
@@ -366,6 +372,12 @@ export DEEPSEEK_MODEL="deepseek-chat"
 The LLM is only given heading candidates plus small local context windows. It is
 not asked to rewrite the full document. If the API key is missing, times out, or
 returns invalid JSON, the builder falls back to local rule decisions.
+
+The durable design also allows a later section-reasoning LLM pass for local
+tree conflicts, such as repeated subsection titles, TOC/body disagreement, or
+missing explicit headings. That pass should use small context windows,
+schema-validated actions, cached outputs, and quality gates; it should not
+rewrite source text or replace the deterministic pipeline.
 
 For large documents, keep requests small:
 

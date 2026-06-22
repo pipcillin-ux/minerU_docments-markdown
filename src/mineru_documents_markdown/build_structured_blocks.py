@@ -14,7 +14,7 @@ from .heading_candidates import block_id as make_block_id
 from .heading_candidates import extract_heading_candidates, write_heading_candidates
 from .heading_decisions import HeadingDecision, build_rule_decisions, split_heading_text, write_heading_decisions
 from .llm_heading_assist import maybe_assist_decisions
-from .section_tree import build_section_tree, write_section_tree
+from .section_tree import attach_section_tree, build_section_tree, write_section_tree
 from .structure_utils import (
     classify_item_regions,
     classify_page_regions,
@@ -25,6 +25,7 @@ from .structure_utils import (
     is_probable_body_section,
     is_probable_major_heading,
     is_probable_numbered_subsection,
+    is_numbered_prose_fragment,
     item_text,
     load_tasks,
     looks_like_toc_entry,
@@ -284,6 +285,8 @@ def classify_block(
     toc_levels: dict[str, int],
 ) -> tuple[str, int | None, bool, bool, int | None]:
     item_type = str(item.get("type") or "unknown")
+    if region != "toc" and item_type == "toc":
+        item_type = "text"
     text = normalize_text(item_text(item))
     include_region = semantic_scope == "full" or region == "body"
     if item_type in {"header", "footer", "page_number"} or text in repeated_margins:
@@ -296,6 +299,8 @@ def classify_block(
         return "paragraph", None, include_region, region == "body", toc_level
     if looks_like_toc_entry(text) and item_type in {"text", "aside_text", "list"}:
         return "paragraph", None, include_region, False, toc_level
+    if not toc_level and is_numbered_prose_fragment(text) and item_type in {"text", "aside_text", "image"}:
+        return "paragraph", None, include_region, region == "body", toc_level
     if toc_level and item_type in {"text", "aside_text", "image"}:
         return "heading", toc_level, include_region, region == "body", toc_level
     pattern_level = heading_level_from_text(text, toc_levels)
@@ -783,6 +788,10 @@ def build_for_output_dir(
             semantic_count += 1
 
     section_tree_payload = build_section_tree(out_dir.name, structured_blocks, toc_node_dicts)
+    structured_blocks = attach_section_tree(structured_blocks, section_tree_payload)
+    with structured_path.open("w", encoding="utf-8") as jsonl:
+        for block in structured_blocks:
+            jsonl.write(json.dumps(block, ensure_ascii=False) + "\n")
     write_section_tree(out_dir / "section_tree.json", section_tree_payload)
 
     diagnostics = heading_diagnostics(structured_blocks, decisions)

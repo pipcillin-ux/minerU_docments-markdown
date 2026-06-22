@@ -15,6 +15,7 @@ from .structure_utils import (
     is_probable_body_section,
     is_probable_major_heading,
     is_probable_numbered_subsection,
+    is_numbered_prose_fragment,
     normalize_text,
     non_heading_line_like,
     reference_caption_like,
@@ -211,6 +212,21 @@ def rule_decision_for_candidate(
             confidence=0.72,
             decision_source="rule",
             reason="The candidate looks like a short OCR/layout heading fragment.",
+        )
+
+    if is_numbered_prose_fragment(text):
+        return HeadingDecision(
+            candidate_id=candidate.candidate_id,
+            block_id=candidate.block_id,
+            action="demote_to_paragraph",
+            is_heading=False,
+            heading_text="",
+            remaining_text=text,
+            level=None,
+            parent_path=[],
+            confidence=0.8,
+            decision_source="rule",
+            reason="The candidate is a numbered prose/list item, not a stable heading.",
         )
 
     pattern_level = heading_level_from_text(text, toc_levels)
