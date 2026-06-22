@@ -307,8 +307,7 @@ Recommended usage:
 - `section_tree.json`: sidecar body section tree. It prefers body headings for
   parent/child recovery and falls back to the TOC backbone when body headings
   are too sparse. It is used to attach each body block to a stable section path;
-  later phases can use it as the authoritative source for Markdown heading
-  levels.
+  semantic Markdown body headings are rendered against this tree.
 - `heading_candidates.jsonl`: local heading candidates with layout and text
   signals.
 - `heading_decisions.jsonl`: audited heading repair decisions. Actions include
@@ -328,8 +327,9 @@ The semantic rebuild now handles the main structure-drift cases explicitly:
   level does not drift between H1/H2/H3.
 - Section tree: `section_tree.json` records the long-term body parent/child
   structure and `structured_blocks.jsonl` is backfilled with tree assignment
-  fields. The current phase still leaves `.semantic.md` heading rendering
-  unchanged.
+  fields. Semantic Markdown body heading levels are rendered from the tree:
+  headings that match a section node use the node level, while local headings
+  inside a section are constrained below their assigned tree parent.
 - Broken headings: split chapter titles can be conservatively merged, while
   glued "heading + prose" or "heading + table/figure reference tail" text is
   split back into heading and body content.

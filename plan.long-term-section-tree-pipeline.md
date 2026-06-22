@@ -397,6 +397,7 @@ src/mineru_documents_markdown/section_tree_quality.py
 
 - `.semantic.md` 的 `#` 层级来自 `section_tree.json`。
 - 旧的局部 `heading_level` 变为候选层级，不再是最终层级。
+- 命中章节树节点的正文标题使用 `tree_heading_level`；章节内部未进入树节点的小标题在所属树节点之下渲染，避免 TOC-backbone 文档被压平。
 
 验收：
 

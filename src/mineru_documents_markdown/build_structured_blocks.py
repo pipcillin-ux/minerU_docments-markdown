@@ -511,6 +511,105 @@ def front_matter_heading_splits(
     return resolved
 
 
+def semantic_heading_level(block: dict[str, Any]) -> int | None:
+    local_level: int | None
+    try:
+        raw_level = int(block.get("heading_level") or 0)
+    except (TypeError, ValueError):
+        raw_level = 0
+    local_level = raw_level if 1 <= raw_level <= 6 else None
+
+    if block.get("region") == "body":
+        try:
+            tree_level = int(block.get("tree_heading_level") or 0)
+        except (TypeError, ValueError):
+            tree_level = 0
+        if 1 <= tree_level <= 6:
+            path = list(block.get("tree_section_path") or [])
+            text_key = heading_key(str(block.get("text") or ""))
+            section_key = heading_key(str(path[-1])) if path else ""
+            if text_key and text_key == section_key:
+                return tree_level
+            if local_level is not None:
+                return min(6, max(tree_level + 1, local_level))
+            return tree_level
+    return local_level
+
+
+def render_semantic_markdown(
+    blocks: list[dict[str, Any]],
+    toc_levels: dict[str, int],
+) -> tuple[str, int]:
+    lines: list[str] = []
+    semantic_count = 0
+    for block in blocks:
+        if not block.get("include_in_semantic"):
+            continue
+        block_type = str(block.get("block_type") or "")
+        region = str(block.get("region") or "")
+        content = str(block.get("text") or "")
+        content_clean = normalize_text(content)
+        extra = block
+
+        if block_type == "toc":
+            lines.extend(toc_plain_lines(content))
+        elif block_type == "heading":
+            toc_lines = toc_semantic_lines(content, toc_levels) if region == "front_matter" else None
+            if toc_lines is not None:
+                lines.extend(toc_lines)
+            else:
+                level = semantic_heading_level(block)
+                if level:
+                    lines.extend(["", f"{'#' * level} {normalize_heading_text(content_clean)}", ""])
+                elif content_clean:
+                    lines.extend([content_clean, ""])
+            remaining_text = normalize_text(str(block.get("remaining_text") or ""))
+            if remaining_text:
+                lines.extend([remaining_text.strip(), ""])
+        elif block_type == "table":
+            caption = extra.get("table_caption")
+            if caption:
+                lines.extend(["", f"**表：{caption}**", ""])
+            lines.extend(["", content.strip(), ""])
+            for footnote in normalized_lines(extra.get("table_footnote")):
+                lines.append(footnote)
+            if extra.get("table_footnote"):
+                lines.append("")
+        elif block_type == "image":
+            image_path = extra.get("image_path")
+            caption = extra.get("image_caption")
+            if caption:
+                lines.extend(["", f"**图：{caption}**"])
+            if image_path:
+                lines.append(f"![]({image_path})")
+            if content_clean:
+                lines.append(content_clean)
+            for footnote in normalized_lines(extra.get("image_footnote")):
+                lines.append(footnote)
+            lines.append("")
+        elif block_type == "list":
+            toc_lines = toc_semantic_lines(content, toc_levels) if region == "front_matter" else None
+            if toc_lines is not None:
+                lines.extend(toc_lines)
+            else:
+                for line in content.splitlines():
+                    line = line.strip()
+                    if line:
+                        lines.append(f"- {line}")
+                lines.append("")
+        else:
+            toc_lines = toc_semantic_lines(content, toc_levels) if region == "front_matter" else None
+            if toc_lines is not None:
+                lines.extend(toc_lines)
+            elif content.strip():
+                lines.extend([content.strip(), ""])
+        semantic_count += 1
+
+    semantic_text = "\n".join(lines)
+    semantic_text = re.sub(r"\n{3,}", "\n\n", semantic_text).strip() + "\n"
+    return semantic_text, semantic_count
+
+
 def build_for_output_dir(
     out_dir: Path,
     semantic_scope: str = "full",
@@ -804,8 +903,7 @@ def build_for_output_dir(
         encoding="utf-8",
     )
 
-    semantic_text = "\n".join(semantic_lines)
-    semantic_text = re.sub(r"\n{3,}", "\n\n", semantic_text).strip() + "\n"
+    semantic_text, semantic_count = render_semantic_markdown(structured_blocks, toc_levels)
     semantic_path.write_text(semantic_text, encoding="utf-8")
     return block_count, semantic_count
 

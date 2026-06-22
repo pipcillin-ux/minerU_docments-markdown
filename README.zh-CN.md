@@ -283,7 +283,7 @@ output/<文档名>/<文档名>.semantic.md
 - `<文档名>.semantic.md`：结构修复后的全文语义版，默认保留前置页、正文、参考文献和附录，只去掉页眉、页脚、页码等重复噪声。
 - `structured_blocks.jsonl`：机器可读结构化中间层，包含页码、分块、块类型、标题层级、旧版章节路径、章节树字段、bbox、表格、图片、标题决策审计等信息。`section_id`、`tree_section_path`、`tree_heading_level`、`tree_section_source`、`tree_section_confidence` 会把正文块挂到重建后的章节树；`recommended_for_rag` 标记更适合进入 RAG 的正文块。
 - `toc_tree.json`：从目录页抽取的目录树，包含父路径和页码提示。
-- `section_tree.json`：正文章节树产物，优先使用正文标题恢复父子关系；当正文标题不足时，使用 TOC backbone 兜底。它已用于给每个正文块回填稳定章节路径，后续可作为反写 Markdown 标题层级的权威结构来源。
+- `section_tree.json`：正文章节树产物，优先使用正文标题恢复父子关系；当正文标题不足时，使用 TOC backbone 兜底。它已用于给每个正文块回填稳定章节路径，并用于约束语义 Markdown 的正文标题层级。
 - `heading_candidates.jsonl`：本地标题候选，包含文本、版面和上下文信号。
 - `heading_decisions.jsonl`：标题修复决策记录，支持 `keep_heading`、`promote_to_heading`、`demote_to_paragraph`、`split_heading`。
 - `heading_diagnostics.json`：语义标题结构质检指标。
@@ -294,7 +294,7 @@ output/<文档名>/<文档名>.semantic.md
 
 - 目录边界：按 item 级别识别 `front_matter`、`toc`、`body`、`back_matter`，目录区渲染为普通 `**目录**` 区块，不再把目录条目写成 Markdown 标题；目录块默认不进入 RAG 正文分块。
 - 标题层级：优先使用 `toc_tree.json` 和编号模式推断层级，正文同模式兄弟标题会做一致性检查，避免同一层级一会儿变成一级标题、一会儿变成三级标题。
-- 章节树：生成 `section_tree.json` 作为长期稳定的正文父子关系层，并将树归属字段回填到 `structured_blocks.jsonl`；当前阶段仍不改变 `.semantic.md` 标题输出。
+- 章节树：生成 `section_tree.json` 作为长期稳定的正文父子关系层，并将树归属字段回填到 `structured_blocks.jsonl`。语义 Markdown 的正文标题层级由章节树约束：命中章节节点本身的标题使用节点层级，章节内部的局部小标题会落在所属树节点之下。
 - 断行标题：支持保守合并被拆断的章节标题，并把“标题 + 正文句子”“标题 + 图表引用尾巴”等粘连文本拆回标题和正文。
 - 非标题降级：目录索引、CIP/编目行、参考文献条目、坐标轴/OCR 数字串、图表说明尾巴、复习题问句、长编号正文句/列表项等不再参与正文标题层级判断。
 - 质量门控：`mineru-heading-quality` 会检查 TOC 泄漏、目录项进入正文大纲、标题层级跳跃、同模式兄弟标题不一致等问题；本仓库当前全量输出目标是 `0 FAIL / 0 WARN`。
