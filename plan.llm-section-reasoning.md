@@ -401,3 +401,67 @@ git diff --check
 - 采纳门会比较 base 与 reasoned 的结构问题，只阻断新增结构问题，避免历史基线问题误杀。
 - 修复了 `attach_section_tree` 中 page fallback 抢过 index range 的问题：存在精确 index 匹配时不再使用页码兜底匹配。
 - LLM 插入的小节遇到后续同级/更高级正文 heading 时会提前截断 range，避免 `(一)` 小节吞掉 `(二)` 或下一节。
+
+## Phase 5D：全库章节推理汇总计划
+
+状态：已实现。
+
+### 需求分析
+
+在高置信 LLM 决策可以进入主输出之后，下一步问题变成“哪些文档值得继续调用
+DeepSeek、哪些文档已有高质量决策但还没采纳、哪些文档已经进入主输出”。如果
+只看每本书目录下的局部报告，很难判断全库优先级，也容易重复花费 LLM 调用。
+
+因此新增一个只读的 corpus summary 层：
+
+- 不调用大模型。
+- 不改写 `section_tree.json`、`structured_blocks.jsonl`、`.semantic.md`。
+- 读取每本文档的候选、决策、旁路产物和采纳报告。
+- 输出全库级 CSV 和 Markdown 汇总，作为批量 review/adopt 的操作面板。
+- 统一流水线启用 `--section-reasoning collect|review|apply|adopt` 时，也会在对应阶段之后自动刷新全库 summary。
+
+### 技术路径
+
+新增模式：
+
+```bash
+.venv/bin/mineru-section-reasoning --mode summary --min-confidence 0.86
+```
+
+输出：
+
+```text
+output/section_reasoning_summary.csv
+output/section_reasoning_summary.md
+```
+
+汇总维度：
+
+- 每本文档的候选数量和候选类型分布。
+- 已有 LLM 决策数量和 action 分布。
+- 达到置信阈值的 `insert_child_section` 决策数量。
+- 通过当前采纳检查、但尚未进入主输出的决策数量。
+- 主 `section_tree.json` 中已采纳的 `llm_section_reasoning` 节点数量。
+- `section_reasoning_adoption_report.md` 中记录的采纳状态。
+- 待复核队列、待采纳队列、已采纳队列和高置信但不可采纳队列。
+
+### 验收
+
+已验证：
+
+```bash
+.venv/bin/python -m py_compile src/mineru_documents_markdown/section_reasoning.py
+.venv/bin/python -m py_compile src/mineru_documents_markdown/run_pipeline.py
+.venv/bin/mineru-section-reasoning --help
+.venv/bin/mineru-run-pipeline --help
+.venv/bin/mineru-section-reasoning --mode collect
+.venv/bin/mineru-section-reasoning --mode summary --min-confidence 0.86
+```
+
+当前全库结果：
+
+- 44 本文档。
+- 1641 个章节推理候选。
+- 1 条已有 LLM 决策。
+- 1 个主输出中已采纳的 LLM 推理节点。
+- 其余文档进入 review queue，适合后续分批调用 DeepSeek 复核。

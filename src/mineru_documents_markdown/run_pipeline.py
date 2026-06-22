@@ -219,7 +219,7 @@ def section_reasoning_command(args: argparse.Namespace, mode: str, document: str
         cmd.extend(["--document", document])
     if args.section_reasoning_limit is not None and mode in {"collect", "review"}:
         cmd.extend(["--limit", str(args.section_reasoning_limit)])
-    if args.section_reasoning_min_confidence is not None and mode in {"apply", "adopt"}:
+    if args.section_reasoning_min_confidence is not None and mode in {"summary", "apply", "adopt"}:
         cmd.extend(["--min-confidence", str(args.section_reasoning_min_confidence)])
     if mode == "adopt":
         cmd.extend(["--target", "main"])
@@ -236,16 +236,20 @@ def run_section_reasoning(args: argparse.Namespace, document: str | None) -> boo
     run_stage("Section reasoning collect", section_reasoning_command(args, "collect", document))
     if args.section_reasoning == "collect":
         run_stage("Section reasoning report", section_reasoning_command(args, "report", document))
+        run_stage("Section reasoning summary", section_reasoning_command(args, "summary", None))
         return False
     if args.section_reasoning == "review":
         run_stage("Section reasoning review", section_reasoning_command(args, "review", document))
         run_stage("Section reasoning report", section_reasoning_command(args, "report", document))
+        run_stage("Section reasoning summary", section_reasoning_command(args, "summary", None))
         return False
     if args.section_reasoning == "apply":
         run_stage("Section reasoning apply sidecars", section_reasoning_command(args, "apply", document))
+        run_stage("Section reasoning summary", section_reasoning_command(args, "summary", None))
         return False
     if args.section_reasoning == "adopt":
         run_stage("Section reasoning adopt main outputs", section_reasoning_command(args, "adopt", document))
+        run_stage("Section reasoning summary", section_reasoning_command(args, "summary", None))
         return True
     return False
 

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Collect and optionally review section-tree reasoning candidates."""
+"""Collect, review, summarize, and apply section-tree reasoning candidates."""
 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 from collections import Counter, defaultdict
@@ -33,10 +34,10 @@ Prefer uncertain when evidence is insufficient."""
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Collect or review section-tree reasoning candidates.")
+    parser = argparse.ArgumentParser(description="Collect, review, summarize, or apply section-tree reasoning candidates.")
     parser.add_argument("--output-dir", default="output", help="Root output directory.")
     parser.add_argument("--document", action="append", help="Only process this output document name.")
-    parser.add_argument("--mode", choices=("collect", "report", "review", "apply", "adopt"), default="collect")
+    parser.add_argument("--mode", choices=("collect", "report", "summary", "review", "apply", "adopt"), default="collect")
     parser.add_argument(
         "--target",
         choices=("sidecar", "main"),
@@ -51,7 +52,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--min-confidence",
         type=float,
-        help="Minimum LLM confidence. Defaults to 0.82 for apply and 0.86 for adopt.",
+        help="Minimum LLM confidence. Defaults to 0.82 for apply and 0.86 for summary/adopt.",
     )
     parser.add_argument("--adoption-backup", action="store_true", help="Write .pre-adopt backup files.")
     parser.add_argument("--force", action="store_true", help="Ignore cached LLM review responses.")
@@ -432,6 +433,14 @@ def adoption_report_path(out_dir: Path) -> Path:
     return out_dir / "section_reasoning_adoption_report.md"
 
 
+def summary_csv_path(root: Path) -> Path:
+    return root / "section_reasoning_summary.csv"
+
+
+def summary_report_path(root: Path) -> Path:
+    return root / "section_reasoning_summary.md"
+
+
 def main_section_tree_path(out_dir: Path) -> Path:
     return out_dir / "section_tree.json"
 
@@ -660,10 +669,293 @@ def report_mode(args: argparse.Namespace) -> int:
     return 0
 
 
+def format_counter(counter: Counter[str]) -> str:
+    return "; ".join(f"{key}:{count}" for key, count in sorted(counter.items()) if key)
+
+
+def markdown_cell(value: Any) -> str:
+    text = str(value if value is not None else "")
+    return text.replace("|", "\\|").replace("\n", " ")
+
+
+def parse_report_bullet(path: Path, label: str) -> str:
+    if not path.exists():
+        return ""
+    prefix = f"- {label}:"
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith(prefix):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
+def parse_report_int(path: Path, label: str) -> int:
+    raw = parse_report_bullet(path, label)
+    try:
+        return int(raw)
+    except ValueError:
+        return 0
+
+
+def reasoning_node_count(path: Path) -> int:
+    payload = load_json(path, {"nodes": []})
+    total = 0
+    for node in payload.get("nodes") or []:
+        source = str(node.get("reasoning_source") or "")
+        evidence = {str(value) for value in node.get("evidence") or []}
+        if source == "llm_section_reasoning" or "llm_section_reasoning" in evidence:
+            total += 1
+    return total
+
+
+def high_confidence_insert_count(decisions: list[dict[str, Any]], min_confidence: float) -> int:
+    return sum(
+        1
+        for decision in decisions
+        if str(decision.get("decision_source") or "") == "llm_section_reasoning"
+        and str(decision.get("action") or "") == "insert_child_section"
+        and clamp_confidence(decision.get("confidence")) >= min_confidence
+    )
+
+
+def summarize_document(out_dir: Path, *, min_confidence: float) -> dict[str, Any]:
+    candidates = load_jsonl(candidate_path(out_dir))
+    decisions = load_jsonl(decision_path(out_dir))
+    candidate_counts = Counter(str(candidate.get("candidate_type") or "") for candidate in candidates)
+    decision_counts = Counter(str(decision.get("action") or "") for decision in decisions)
+    adoption_report = adoption_report_path(out_dir)
+
+    adoption_ready = 0
+    adoption_check_rejected = 0
+    adoption_check_status = ""
+    if decisions:
+        result = build_reasoned_candidate_for_document(
+            out_dir,
+            min_confidence=min_confidence,
+            require_llm_source=True,
+        )
+        adoption_check_status = str(result.get("status") or "")
+        adoption_ready = len(result.get("applied") or [])
+        adoption_check_rejected = len(result.get("rejected") or [])
+
+    main_reasoning_nodes = reasoning_node_count(main_section_tree_path(out_dir))
+    sidecar_reasoning_nodes = reasoning_node_count(reasoned_section_tree_path(out_dir))
+    decision_count = len(decisions)
+    candidate_count = len(candidates)
+    review_needed = candidate_count > decision_count
+    main_adoption_pending = adoption_ready > 0
+
+    return {
+        "document": out_dir.name,
+        "candidates": candidate_count,
+        "decisions": decision_count,
+        "candidate_types": format_counter(candidate_counts),
+        "decision_actions": format_counter(decision_counts),
+        "high_confidence_insert_decisions": high_confidence_insert_count(decisions, min_confidence),
+        "adoption_check_status": adoption_check_status,
+        "adoption_ready": adoption_ready,
+        "adoption_check_rejected": adoption_check_rejected,
+        "main_reasoning_nodes": main_reasoning_nodes,
+        "sidecar_reasoning_nodes": sidecar_reasoning_nodes,
+        "adoption_report_status": parse_report_bullet(adoption_report, "Status"),
+        "adoption_report_adopted": parse_report_int(adoption_report, "Adopted"),
+        "adoption_report_rejected": parse_report_int(adoption_report, "Rejected"),
+        "adoption_rolled_back": parse_report_bullet(adoption_report, "Rolled back"),
+        "review_needed": review_needed,
+        "main_adoption_pending": main_adoption_pending,
+        "_candidate_counts": candidate_counts,
+        "_decision_counts": decision_counts,
+    }
+
+
+def write_summary_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+    public_fields = [
+        "document",
+        "candidates",
+        "decisions",
+        "candidate_types",
+        "decision_actions",
+        "high_confidence_insert_decisions",
+        "adoption_check_status",
+        "adoption_ready",
+        "adoption_check_rejected",
+        "main_reasoning_nodes",
+        "sidecar_reasoning_nodes",
+        "adoption_report_status",
+        "adoption_report_adopted",
+        "adoption_report_rejected",
+        "adoption_rolled_back",
+        "review_needed",
+        "main_adoption_pending",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=public_fields)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field) for field in public_fields})
+
+
+def summary_table(rows: list[dict[str, Any]], columns: list[tuple[str, str]], limit: int | None = None) -> list[str]:
+    selected = rows if limit is None else rows[:limit]
+    if not selected:
+        return ["- None."]
+    header = "| " + " | ".join(label for label, _ in columns) + " |"
+    divider = "| " + " | ".join("---" for _ in columns) + " |"
+    lines = [header, divider]
+    for row in selected:
+        values = [markdown_cell(row.get(key)) for _, key in columns]
+        lines.append("| " + " | ".join(values) + " |")
+    return lines
+
+
+def write_summary_report(path: Path, rows: list[dict[str, Any]], *, min_confidence: float) -> None:
+    total_candidates = sum(int(row.get("candidates") or 0) for row in rows)
+    total_decisions = sum(int(row.get("decisions") or 0) for row in rows)
+    total_high_conf = sum(int(row.get("high_confidence_insert_decisions") or 0) for row in rows)
+    total_ready = sum(int(row.get("adoption_ready") or 0) for row in rows)
+    total_main_nodes = sum(int(row.get("main_reasoning_nodes") or 0) for row in rows)
+    review_queue = [row for row in rows if row.get("review_needed")]
+    adoption_queue = [row for row in rows if int(row.get("adoption_ready") or 0) > 0]
+    adopted_rows = [row for row in rows if int(row.get("main_reasoning_nodes") or 0) > 0]
+    blocked_rows = [
+        row
+        for row in rows
+        if int(row.get("high_confidence_insert_decisions") or 0) > 0
+        and int(row.get("adoption_ready") or 0) == 0
+        and int(row.get("main_reasoning_nodes") or 0) == 0
+    ]
+    active_rows = [
+        row
+        for row in rows
+        if int(row.get("candidates") or 0)
+        or int(row.get("decisions") or 0)
+        or int(row.get("main_reasoning_nodes") or 0)
+        or int(row.get("sidecar_reasoning_nodes") or 0)
+    ]
+
+    lines = [
+        "# Section Reasoning Corpus Summary",
+        "",
+        f"- Generated at: {datetime.now(UTC).isoformat()}",
+        f"- Output root: `{path.parent}`",
+        f"- Minimum confidence: {min_confidence:.2f}",
+        f"- Documents scanned: {len(rows)}",
+        f"- Candidates: {total_candidates}",
+        f"- Decisions: {total_decisions}",
+        f"- High-confidence insert decisions: {total_high_conf}",
+        f"- Adoption-ready decisions: {total_ready}",
+        f"- Main-output LLM reasoning nodes: {total_main_nodes}",
+        "",
+        "## Recommended Next Commands",
+        "",
+        "```bash",
+        ".venv/bin/mineru-section-reasoning --mode collect",
+        ".venv/bin/mineru-section-reasoning --mode summary --min-confidence 0.86",
+        ".venv/bin/mineru-section-reasoning --mode review --limit 20",
+        ".venv/bin/mineru-section-reasoning --mode adopt --target main --min-confidence 0.86",
+        "```",
+        "",
+        "## Review Queue",
+        "",
+    ]
+    review_queue = sorted(review_queue, key=lambda row: int(row.get("candidates") or 0) - int(row.get("decisions") or 0), reverse=True)
+    lines.extend(
+        summary_table(
+            review_queue,
+            [
+                ("Document", "document"),
+                ("Candidates", "candidates"),
+                ("Decisions", "decisions"),
+                ("Candidate Types", "candidate_types"),
+            ],
+            limit=30,
+        )
+    )
+    lines.extend(["", "## Adoption Queue", ""])
+    adoption_queue = sorted(adoption_queue, key=lambda row: int(row.get("adoption_ready") or 0), reverse=True)
+    lines.extend(
+        summary_table(
+            adoption_queue,
+            [
+                ("Document", "document"),
+                ("Ready", "adoption_ready"),
+                ("Rejected By Check", "adoption_check_rejected"),
+                ("Actions", "decision_actions"),
+            ],
+            limit=30,
+        )
+    )
+    lines.extend(["", "## Already Adopted In Main Outputs", ""])
+    lines.extend(
+        summary_table(
+            adopted_rows,
+            [
+                ("Document", "document"),
+                ("Main Nodes", "main_reasoning_nodes"),
+                ("Report Status", "adoption_report_status"),
+                ("Report Adopted", "adoption_report_adopted"),
+            ],
+            limit=30,
+        )
+    )
+    lines.extend(["", "## High-Confidence But Not Adoptable", ""])
+    lines.extend(
+        summary_table(
+            blocked_rows,
+            [
+                ("Document", "document"),
+                ("High-Confidence", "high_confidence_insert_decisions"),
+                ("Check Status", "adoption_check_status"),
+                ("Rejected By Check", "adoption_check_rejected"),
+                ("Actions", "decision_actions"),
+            ],
+            limit=30,
+        )
+    )
+    lines.extend(["", "## Per-Document Status", ""])
+    lines.extend(
+        summary_table(
+            active_rows,
+            [
+                ("Document", "document"),
+                ("Candidates", "candidates"),
+                ("Decisions", "decisions"),
+                ("High-Conf", "high_confidence_insert_decisions"),
+                ("Ready", "adoption_ready"),
+                ("Main Nodes", "main_reasoning_nodes"),
+                ("Candidate Types", "candidate_types"),
+                ("Actions", "decision_actions"),
+            ],
+        )
+    )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def summary_mode(args: argparse.Namespace) -> int:
+    root = Path(args.output_dir)
+    document_names = set(args.document) if args.document else None
+    min_confidence = confidence_threshold(args)
+    rows = [
+        summarize_document(out_dir, min_confidence=min_confidence)
+        for out_dir in output_dirs(root)
+        if not document_names or out_dir.name in document_names
+    ]
+    write_summary_csv(summary_csv_path(root), rows)
+    write_summary_report(summary_report_path(root), rows, min_confidence=min_confidence)
+    print(
+        "Section reasoning summary complete: "
+        f"{len(rows)} document(s), "
+        f"{sum(int(row.get('candidates') or 0) for row in rows)} candidate(s), "
+        f"{sum(int(row.get('decisions') or 0) for row in rows)} decision(s)."
+    )
+    print(f"Wrote {summary_csv_path(root)}")
+    print(f"Wrote {summary_report_path(root)}")
+    return 0
+
+
 def confidence_threshold(args: argparse.Namespace) -> float:
     if args.min_confidence is not None:
         return max(0.0, min(args.min_confidence, 1.0))
-    return 0.86 if args.mode == "adopt" else 0.82
+    return 0.86 if args.mode in {"adopt", "summary"} else 0.82
 
 
 def block_index_by_id(blocks: list[dict[str, Any]]) -> dict[str, int]:
@@ -1452,6 +1744,8 @@ def main() -> int:
     if args.mode == "collect":
         collect_mode(args)
         return 0
+    if args.mode == "summary":
+        return summary_mode(args)
     if args.mode == "review":
         return review_mode(args)
     if args.mode == "apply":

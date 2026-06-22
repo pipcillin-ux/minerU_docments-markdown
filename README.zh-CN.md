@@ -116,6 +116,9 @@ docs/
 ```
 
 `adopt` 会先生成 reasoned 候选，再只晋升通过确定性结构校验和采纳后标题质量门的决策。如果质量门失败，会恢复原主输出的 `section_tree.json`、`structured_blocks.jsonl` 和 `<文档名>.semantic.md`。
+只要启用 `--section-reasoning collect|review|apply|adopt`，流水线也会同步刷新
+`output/section_reasoning_summary.csv` 和
+`output/section_reasoning_summary.md`。
 
 DeepSeek 复核会从环境变量或 `.env` 读取 `DEEPSEEK_API_KEY` /
 `deepseek_api_key`，并输出：
@@ -355,7 +358,19 @@ export DEEPSEEK_MODEL="deepseek-chat"
 ```bash
 .venv/bin/mineru-section-reasoning --mode collect --limit 200
 .venv/bin/mineru-section-reasoning --mode report
+.venv/bin/mineru-section-reasoning --mode summary --min-confidence 0.86
 ```
+
+`summary` 是只读汇总模式，不调用大模型，也不改主输出。它会把全库的复核
+和采纳状态整理成：
+
+```text
+output/section_reasoning_summary.csv
+output/section_reasoning_summary.md
+```
+
+汇总报告会列出候选数量、已复核决策、高置信插入决策、当前可采纳决策、
+主输出中已经采纳的 LLM 推理节点、仍待复核的文档和已经进入主输出的文档。
 
 使用 DeepSeek/OpenAI-compatible JSON 响应复核候选：
 

@@ -127,6 +127,9 @@ main outputs:
 pass deterministic structural checks and a post-adoption heading-quality gate.
 If the gate fails, the primary `section_tree.json`, `structured_blocks.jsonl`,
 and `<document-name>.semantic.md` files are restored.
+Whenever `--section-reasoning collect|review|apply|adopt` is enabled, the
+pipeline also refreshes `output/section_reasoning_summary.csv` and
+`output/section_reasoning_summary.md`.
 
 DeepSeek review reads `DEEPSEEK_API_KEY` or `deepseek_api_key` from the
 environment or `.env`. It writes review overrides to:
@@ -407,7 +410,21 @@ Collect local section-reasoning candidates without calling an LLM:
 ```bash
 .venv/bin/mineru-section-reasoning --mode collect --limit 200
 .venv/bin/mineru-section-reasoning --mode report
+.venv/bin/mineru-section-reasoning --mode summary --min-confidence 0.86
 ```
+
+`summary` is read-only. It aggregates the corpus-level review/adoption state so
+large batches can be triaged before spending LLM calls:
+
+```text
+output/section_reasoning_summary.csv
+output/section_reasoning_summary.md
+```
+
+The summary reports candidate counts, reviewed decisions, high-confidence
+insert decisions, adoption-ready decisions, main-output LLM reasoning nodes,
+documents still waiting for review, and documents already adopted into the main
+outputs.
 
 Review those candidates with DeepSeek/OpenAI-compatible JSON responses:
 
