@@ -11,7 +11,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .build_structured_blocks import render_semantic_markdown
 from .llm_heading_assist import api_config, cache_key, call_chat_completions
+from .section_tree import attach_section_tree, clamp_level, end_block_for_range, toc_level_map, write_section_tree
 from .structure_utils import heading_key, normalize_text, output_dirs
 
 
@@ -33,12 +35,18 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect or review section-tree reasoning candidates.")
     parser.add_argument("--output-dir", default="output", help="Root output directory.")
     parser.add_argument("--document", action="append", help="Only process this output document name.")
-    parser.add_argument("--mode", choices=("collect", "report", "review"), default="collect")
+    parser.add_argument("--mode", choices=("collect", "report", "review", "apply"), default="collect")
     parser.add_argument("--limit", type=int, help="Global candidate/review limit.")
     parser.add_argument("--max-per-document", type=int, default=40)
     parser.add_argument("--max-per-type", type=int, default=12)
     parser.add_argument("--context-radius", type=int, default=3)
     parser.add_argument("--low-confidence-threshold", type=float, default=0.72)
+    parser.add_argument(
+        "--min-confidence",
+        type=float,
+        default=0.82,
+        help="Minimum LLM confidence required for apply mode.",
+    )
     parser.add_argument("--force", action="store_true", help="Ignore cached LLM review responses.")
     return parser.parse_args()
 
@@ -409,6 +417,32 @@ def report_path(out_dir: Path) -> Path:
     return out_dir / "section_reasoning_report.md"
 
 
+def apply_report_path(out_dir: Path) -> Path:
+    return out_dir / "section_reasoning_apply_report.md"
+
+
+def reasoned_section_tree_path(out_dir: Path) -> Path:
+    return out_dir / "section_tree.reasoned.json"
+
+
+def reasoned_structured_blocks_path(out_dir: Path) -> Path:
+    return out_dir / "structured_blocks.reasoned.jsonl"
+
+
+def reasoned_semantic_path(out_dir: Path) -> Path:
+    preferred = out_dir / f"{out_dir.name}.semantic.md"
+    if preferred.exists():
+        name = preferred.name
+    else:
+        matches = sorted(path.name for path in out_dir.glob("*.semantic.md"))
+        name = matches[0] if matches else f"{out_dir.name}.semantic.md"
+    if name.endswith(".semantic.md"):
+        name = f"{name[: -len('.semantic.md')]}.semantic.reasoned.md"
+    else:
+        name = f"{out_dir.name}.semantic.reasoned.md"
+    return out_dir / name
+
+
 def collect_mode(args: argparse.Namespace) -> list[Path]:
     root = Path(args.output_dir)
     document_names = set(args.document) if args.document else None
@@ -599,6 +633,331 @@ def report_mode(args: argparse.Namespace) -> int:
     return 0
 
 
+def block_index_by_id(blocks: list[dict[str, Any]]) -> dict[str, int]:
+    return {str(block.get("block_id") or ""): index for index, block in enumerate(blocks)}
+
+
+def block_page(block: dict[str, Any]) -> int | None:
+    try:
+        page = int(block.get("page"))
+    except (TypeError, ValueError):
+        return None
+    return page if page >= 0 else None
+
+
+def next_reasoned_section_id(existing: set[str], counter: int) -> tuple[str, int]:
+    while True:
+        section_id = f"llm_sec_{counter:06d}"
+        counter += 1
+        if section_id not in existing:
+            existing.add(section_id)
+            return section_id, counter
+
+
+def normalized_node_copy(node: dict[str, Any]) -> dict[str, Any]:
+    copied = dict(node)
+    copied["parent_path"] = list(node.get("parent_path") or [])
+    copied["path"] = list(node.get("path") or [])
+    copied["evidence"] = list(node.get("evidence") or [])
+    return copied
+
+
+def make_inserted_node(
+    *,
+    section_id: str,
+    parent: dict[str, Any],
+    block: dict[str, Any],
+    title: str,
+    level: int,
+    decision: dict[str, Any],
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    parent_path = list(parent.get("path") or [])
+    block_id = str(block.get("block_id") or "")
+    confidence = clamp_confidence(decision.get("confidence"))
+    evidence = [
+        "llm_section_reasoning",
+        "action:insert_child_section",
+        f"candidate:{candidate.get('candidate_id')}",
+    ]
+    return {
+        "section_id": section_id,
+        "title": title,
+        "normalized_key": heading_key(title),
+        "level": level,
+        "parent_id": str(parent.get("section_id") or ""),
+        "parent_path": parent_path,
+        "path": [*parent_path, title],
+        "document_order": 0,
+        "start_page": block_page(block),
+        "end_page": block_page(block),
+        "start_block_id": block_id,
+        "end_block_id": block_id,
+        "source_block_id": block_id,
+        "source_heading_level": clamp_level(block.get("heading_level")),
+        "toc_heading_level": clamp_level(block.get("toc_heading_level")),
+        "region": str(block.get("region") or ""),
+        "confidence": round(confidence, 4),
+        "evidence": evidence,
+        "reasoning_candidate_id": str(candidate.get("candidate_id") or ""),
+        "reasoning_action": "insert_child_section",
+        "reasoning_source": str(decision.get("decision_source") or "llm_section_reasoning"),
+        "reasoning_reason": str(decision.get("reason") or ""),
+    }
+
+
+def node_start_index(node: dict[str, Any], indexes: dict[str, int]) -> int | None:
+    start = indexes.get(str(node.get("start_block_id") or ""))
+    if start is None:
+        start = indexes.get(str(node.get("source_block_id") or ""))
+    return start
+
+
+def recompute_reasoned_ranges(nodes: list[dict[str, Any]], blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    indexes = block_index_by_id(blocks)
+    original_order = {id(node): index for index, node in enumerate(nodes)}
+
+    def sort_key(node: dict[str, Any]) -> tuple[int, int, int]:
+        start = node_start_index(node, indexes)
+        if start is None:
+            start = len(blocks) + int(node.get("document_order") or 0)
+        return (start, int(node.get("level") or 99), original_order[id(node)])
+
+    sorted_nodes = sorted(nodes, key=sort_key)
+    start_indexes = [node_start_index(node, indexes) for node in sorted_nodes]
+
+    for order, node in enumerate(sorted_nodes, start=1):
+        node["document_order"] = order
+
+    for index, node in enumerate(sorted_nodes):
+        start_index = start_indexes[index]
+        if start_index is None:
+            continue
+        level = clamp_level(node.get("level")) or 6
+        end_index = len(blocks) - 1
+        for next_index in range(index + 1, len(sorted_nodes)):
+            next_start_index = start_indexes[next_index]
+            if next_start_index is None or next_start_index <= start_index:
+                continue
+            next_level = clamp_level(sorted_nodes[next_index].get("level")) or 6
+            if next_level <= level:
+                end_index = max(start_index, next_start_index - 1)
+                break
+        end_block = end_block_for_range(blocks, start_index, end_index)
+        node["end_block_id"] = str(end_block.get("block_id") or node.get("start_block_id") or "")
+        node["end_page"] = block_page(end_block) or node.get("start_page")
+
+    return sorted_nodes
+
+
+def apply_decisions_for_document(
+    out_dir: Path,
+    *,
+    min_confidence: float,
+) -> dict[str, Any]:
+    blocks = load_jsonl(out_dir / "structured_blocks.jsonl")
+    section_payload = load_json(out_dir / "section_tree.json", {"nodes": []})
+    toc_payload = load_json(out_dir / "toc_tree.json", {"nodes": []})
+    candidates = load_jsonl(candidate_path(out_dir))
+    decisions = load_jsonl(decision_path(out_dir))
+
+    if not blocks:
+        return {"status": "skipped", "reason": "structured_blocks.jsonl is missing or empty.", "applied": []}
+
+    original_nodes = [normalized_node_copy(node) for node in section_payload.get("nodes") or []]
+    node_by_id = {str(node.get("section_id") or ""): node for node in original_nodes}
+    candidates_by_id = {str(candidate.get("candidate_id") or ""): candidate for candidate in candidates}
+    blocks_by_id = {str(block.get("block_id") or ""): block for block in blocks}
+    existing_ids = set(node_by_id)
+    inserted_nodes: list[dict[str, Any]] = []
+    applied: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    next_id_counter = 1
+
+    for decision in decisions:
+        candidate_id_value = str(decision.get("candidate_id") or "")
+        action = str(decision.get("action") or "")
+        confidence = clamp_confidence(decision.get("confidence"))
+        if action != "insert_child_section":
+            rejected.append({"candidate_id": candidate_id_value, "action": action, "reason": "unsupported_action"})
+            continue
+        if confidence < min_confidence:
+            rejected.append(
+                {
+                    "candidate_id": candidate_id_value,
+                    "action": action,
+                    "confidence": confidence,
+                    "reason": "below_min_confidence",
+                }
+            )
+            continue
+
+        candidate = candidates_by_id.get(candidate_id_value)
+        if candidate is None:
+            rejected.append({"candidate_id": candidate_id_value, "action": action, "reason": "missing_candidate"})
+            continue
+        target_parent_id = str(decision.get("target_parent_id") or "")
+        parent = node_by_id.get(target_parent_id)
+        if parent is None:
+            rejected.append({"candidate_id": candidate_id_value, "action": action, "reason": "missing_target_parent"})
+            continue
+        parent_level = clamp_level(parent.get("level"))
+        if parent_level is None or parent_level >= 6:
+            rejected.append({"candidate_id": candidate_id_value, "action": action, "reason": "invalid_parent_level"})
+            continue
+        current_block = candidate.get("current_block") or {}
+        block = blocks_by_id.get(str(current_block.get("block_id") or ""))
+        if block is None:
+            rejected.append({"candidate_id": candidate_id_value, "action": action, "reason": "missing_source_block"})
+            continue
+        if block.get("region") != "body" or block.get("include_in_semantic") is False:
+            rejected.append({"candidate_id": candidate_id_value, "action": action, "reason": "non_body_or_excluded_block"})
+            continue
+
+        title = short_text(decision.get("title")) or short_text(block.get("text"))
+        if not title:
+            rejected.append({"candidate_id": candidate_id_value, "action": action, "reason": "empty_title"})
+            continue
+
+        level = clamp_level(decision.get("level")) or parent_level + 1
+        if level <= parent_level:
+            level = parent_level + 1
+        level = min(level, 6)
+        duplicate = any(
+            str(node.get("parent_id") or "") == target_parent_id
+            and str(node.get("source_block_id") or "") == str(block.get("block_id") or "")
+            and str(node.get("normalized_key") or heading_key(str(node.get("title") or ""))) == heading_key(title)
+            for node in [*original_nodes, *inserted_nodes]
+        )
+        if duplicate:
+            rejected.append({"candidate_id": candidate_id_value, "action": action, "reason": "duplicate_child"})
+            continue
+
+        section_id, next_id_counter = next_reasoned_section_id(existing_ids, next_id_counter)
+        inserted = make_inserted_node(
+            section_id=section_id,
+            parent=parent,
+            block=block,
+            title=title,
+            level=level,
+            decision=decision,
+            candidate=candidate,
+        )
+        inserted_nodes.append(inserted)
+        node_by_id[section_id] = inserted
+        applied.append(
+            {
+                "candidate_id": candidate_id_value,
+                "section_id": section_id,
+                "parent_id": target_parent_id,
+                "title": title,
+                "level": level,
+                "confidence": confidence,
+            }
+        )
+
+    reasoned_nodes = recompute_reasoned_ranges([*original_nodes, *inserted_nodes], blocks)
+    reasoned_payload = {
+        **section_payload,
+        "document": str(section_payload.get("document") or out_dir.name),
+        "version": section_payload.get("version"),
+        "source": f"{section_payload.get('source') or 'section_tree'}+llm_reasoned",
+        "reasoning_version": 1,
+        "reasoning_source": "llm_section_reasoning_sidecar",
+        "reasoning_min_confidence": min_confidence,
+        "applied_decision_count": len(applied),
+        "node_count": len(reasoned_nodes),
+        "nodes": reasoned_nodes,
+    }
+
+    reasoned_blocks = attach_section_tree(blocks, reasoned_payload)
+    toc_levels = toc_level_map(list(toc_payload.get("nodes") or []))
+    semantic_text, semantic_count = render_semantic_markdown(reasoned_blocks, toc_levels)
+
+    write_section_tree(reasoned_section_tree_path(out_dir), reasoned_payload)
+    write_jsonl(reasoned_structured_blocks_path(out_dir), reasoned_blocks)
+    reasoned_semantic_path(out_dir).write_text(semantic_text, encoding="utf-8")
+
+    return {
+        "status": "ok",
+        "applied": applied,
+        "rejected": rejected,
+        "semantic_count": semantic_count,
+        "outputs": [
+            reasoned_section_tree_path(out_dir).name,
+            reasoned_structured_blocks_path(out_dir).name,
+            reasoned_semantic_path(out_dir).name,
+        ],
+    }
+
+
+def write_apply_report(out_dir: Path, result: dict[str, Any]) -> None:
+    lines = [
+        f"# {out_dir.name} 章节推理应用报告",
+        "",
+        f"- Generated at: {datetime.now(UTC).isoformat()}",
+        f"- Status: {result.get('status')}",
+        f"- Applied: {len(result.get('applied') or [])}",
+        f"- Rejected: {len(result.get('rejected') or [])}",
+        "",
+        "## Outputs",
+        "",
+    ]
+    for output in result.get("outputs") or []:
+        lines.append(f"- `{output}`")
+    if not result.get("outputs"):
+        lines.append("- No reasoned sidecar outputs.")
+
+    lines.extend(["", "## Applied Decisions", ""])
+    applied = result.get("applied") or []
+    if applied:
+        for item in applied:
+            lines.append(
+                "- "
+                f"`{item.get('section_id')}` "
+                f"parent=`{item.get('parent_id')}` "
+                f"level={item.get('level')} "
+                f"confidence={item.get('confidence')}: {item.get('title')}"
+            )
+    else:
+        lines.append("- No decisions were applied.")
+
+    lines.extend(["", "## Rejected Decisions", ""])
+    rejected = result.get("rejected") or []
+    if rejected:
+        for item in rejected[:120]:
+            lines.append(
+                "- "
+                f"`{item.get('candidate_id')}` "
+                f"action=`{item.get('action')}` "
+                f"reason=`{item.get('reason')}`"
+            )
+    else:
+        lines.append("- No decisions were rejected.")
+    apply_report_path(out_dir).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def apply_mode(args: argparse.Namespace) -> int:
+    root = Path(args.output_dir)
+    document_names = set(args.document) if args.document else None
+    total_applied = 0
+    processed = 0
+    for out_dir in output_dirs(root):
+        if document_names and out_dir.name not in document_names:
+            continue
+        decisions = load_jsonl(decision_path(out_dir))
+        if not decisions:
+            continue
+        result = apply_decisions_for_document(out_dir, min_confidence=max(0.0, min(args.min_confidence, 1.0)))
+        write_apply_report(out_dir, result)
+        applied_count = len(result.get("applied") or [])
+        total_applied += applied_count
+        processed += 1
+        print(f"[OK] {out_dir.name} | applied {applied_count} | status {result.get('status')}")
+    print(f"Section reasoning apply complete: {total_applied} decision(s) applied across {processed} document(s).")
+    return 0
+
+
 def write_report(out_dir: Path, candidates: list[dict[str, Any]], decisions: list[dict[str, Any]]) -> None:
     candidate_counts = Counter(str(candidate.get("candidate_type") or "") for candidate in candidates)
     decision_counts = Counter(str(decision.get("action") or "") for decision in decisions)
@@ -652,6 +1011,8 @@ def main() -> int:
         return 0
     if args.mode == "review":
         return review_mode(args)
+    if args.mode == "apply":
+        return apply_mode(args)
     return report_mode(args)
 
 

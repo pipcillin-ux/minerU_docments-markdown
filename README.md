@@ -375,11 +375,11 @@ The LLM is only given heading candidates plus small local context windows. It is
 not asked to rewrite the full document. If the API key is missing, times out, or
 returns invalid JSON, the builder falls back to local rule decisions.
 
-The durable design also allows a later section-reasoning LLM pass for local
-tree conflicts, such as repeated subsection titles, TOC/body disagreement, or
-missing explicit headings. That pass should use small context windows,
-schema-validated actions, cached outputs, and quality gates; it should not
-rewrite source text or replace the deterministic pipeline.
+The optional section-reasoning LLM pass handles local tree conflicts, such as
+repeated subsection titles, TOC/body disagreement, or missing explicit
+headings. It uses small context windows, schema-validated actions, cached
+outputs, and quality gates; it does not rewrite source text or replace the
+deterministic pipeline.
 
 Collect local section-reasoning candidates without calling an LLM:
 
@@ -394,12 +394,31 @@ Review those candidates with DeepSeek/OpenAI-compatible JSON responses:
 .venv/bin/mineru-section-reasoning --mode review --limit 20
 ```
 
-This writes sidecar audit files only:
+Collect/review writes sidecar audit files only:
 
 ```text
 output/<document-name>/section_reasoning_candidates.jsonl
 output/<document-name>/section_reasoning_decisions.jsonl
 output/<document-name>/section_reasoning_report.md
+```
+
+Apply high-confidence reviewed decisions to reasoned sidecar outputs:
+
+```bash
+.venv/bin/mineru-section-reasoning --mode apply --min-confidence 0.82
+```
+
+Apply mode is deliberately conservative today: it only materializes
+`insert_child_section` decisions that pass the confidence threshold, then
+recomputes section ranges and reattaches blocks from the original main outputs.
+It does not overwrite `section_tree.json`, `structured_blocks.jsonl`, or
+`<document-name>.semantic.md`.
+
+```text
+output/<document-name>/section_tree.reasoned.json
+output/<document-name>/structured_blocks.reasoned.jsonl
+output/<document-name>/<document-name>.semantic.reasoned.md
+output/<document-name>/section_reasoning_apply_report.md
 ```
 
 For large documents, keep requests small:

@@ -137,14 +137,21 @@ def heading_key(text: str) -> str:
 
 
 def markdown_file(out_dir: Path) -> Path | None:
+    preferred = out_dir / f"{out_dir.name}.md"
+    if preferred.exists():
+        return preferred
     excluded_names = {
         "quality_report.md",
         "heading_quality.md",
+        "section_reasoning_report.md",
+        "section_reasoning_apply_report.md",
     }
     candidates = sorted(
         path
         for path in out_dir.glob("*.md")
-        if not path.name.endswith(".semantic.md") and path.name not in excluded_names
+        if not path.name.endswith((".semantic.md", ".reasoned.md"))
+        and path.name not in excluded_names
+        and not path.name.startswith("section_reasoning_")
     )
     return candidates[0] if candidates else None
 

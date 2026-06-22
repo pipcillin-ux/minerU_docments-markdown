@@ -163,19 +163,24 @@ Phase 5A 只做候选 + review：
 - `review`：可选调用 DeepSeek/OpenAI-compatible 接口，写入 schema 校验后的决策。
 - 不实现 `apply`，不改写主 `section_tree.json`、`structured_blocks.jsonl`、`.semantic.md`。
 
-Phase 5B 才允许受控应用：
+Phase 5A 状态：已实现并提交。
+
+Phase 5B 允许受控应用：
 
 ```bash
 .venv/bin/mineru-section-reasoning --mode apply --min-confidence 0.82
 ```
 
-应用时只允许改结构字段：
+Phase 5B 状态：已实现。当前只自动应用超过置信阈值的 `insert_child_section` 决策；其他动作仍保留在审计文件中，不自动改写。
+
+应用时只写旁路产物：
 
 - `section_tree.reasoned.json`
 - `structured_blocks.reasoned.jsonl`
-- 可选 `.semantic.reasoned.md`
+- `<文档名>.semantic.reasoned.md`
+- `section_reasoning_apply_report.md`
 
-不覆盖主输出，直到新的质量门禁和回归集稳定。
+不会覆盖主输出，直到新的质量门禁和回归集稳定。
 
 ## 验收
 
@@ -207,3 +212,4 @@ Phase 5B：
 - 只生成 `.reasoned.*` 旁路产物。
 - 应用后不得降低现有 heading quality。
 - 回归样本报告能体现 LLM 决策来源和理由。
+- 已用“外科专病中医临床诊治 第3版”的一条高置信 `insert_child_section` 决策验证：原树 347 节点，reasoned 树 348 节点，新增 `llm_sec_000001`，Markdown 渲染为 `### (一)中医`。
