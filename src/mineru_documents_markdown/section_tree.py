@@ -531,7 +531,7 @@ def best_section_for_block(
             ):
                 page_matches.append(node)
 
-    matches = [*index_matches, *page_matches]
+    matches = index_matches or page_matches
     if not matches:
         return None
     return max(

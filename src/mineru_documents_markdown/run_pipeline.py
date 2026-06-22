@@ -70,6 +70,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--review-limit", type=int, help="Maximum WARN issues to review.")
     parser.add_argument("--force-review", action="store_true", help="Ignore cached DeepSeek review responses.")
     parser.add_argument(
+        "--section-reasoning",
+        choices=("none", "collect", "review", "apply", "adopt"),
+        default="none",
+        help="Optional section-tree LLM reasoning stage.",
+    )
+    parser.add_argument("--skip-section-reasoning", action="store_true", help="Skip optional section reasoning.")
+    parser.add_argument("--section-reasoning-limit", type=int, help="Maximum section-reasoning candidates to process.")
+    parser.add_argument(
+        "--section-reasoning-min-confidence",
+        type=float,
+        help="Minimum section-reasoning confidence for apply/adopt.",
+    )
+    parser.add_argument(
+        "--section-reasoning-backup",
+        action="store_true",
+        help="Write .pre-adopt backups when section reasoning adopts main outputs.",
+    )
+    parser.add_argument(
         "--fail-on",
         choices=("none", "warn", "fail"),
         default="fail",
@@ -189,6 +207,49 @@ def review_command(args: argparse.Namespace, review_output: Path, document: str 
     return cmd
 
 
+def section_reasoning_command(args: argparse.Namespace, mode: str, document: str | None) -> list[str]:
+    cmd = module_cmd(
+        "mineru_documents_markdown.section_reasoning",
+        "--output-dir",
+        args.output_dir,
+        "--mode",
+        mode,
+    )
+    if document:
+        cmd.extend(["--document", document])
+    if args.section_reasoning_limit is not None and mode in {"collect", "review"}:
+        cmd.extend(["--limit", str(args.section_reasoning_limit)])
+    if args.section_reasoning_min_confidence is not None and mode in {"apply", "adopt"}:
+        cmd.extend(["--min-confidence", str(args.section_reasoning_min_confidence)])
+    if mode == "adopt":
+        cmd.extend(["--target", "main"])
+        if args.section_reasoning_backup:
+            cmd.append("--adoption-backup")
+    return cmd
+
+
+def run_section_reasoning(args: argparse.Namespace, document: str | None) -> bool:
+    if args.skip_section_reasoning or args.section_reasoning == "none":
+        print("==> Section reasoning skipped")
+        return False
+
+    run_stage("Section reasoning collect", section_reasoning_command(args, "collect", document))
+    if args.section_reasoning == "collect":
+        run_stage("Section reasoning report", section_reasoning_command(args, "report", document))
+        return False
+    if args.section_reasoning == "review":
+        run_stage("Section reasoning review", section_reasoning_command(args, "review", document))
+        run_stage("Section reasoning report", section_reasoning_command(args, "report", document))
+        return False
+    if args.section_reasoning == "apply":
+        run_stage("Section reasoning apply sidecars", section_reasoning_command(args, "apply", document))
+        return False
+    if args.section_reasoning == "adopt":
+        run_stage("Section reasoning adopt main outputs", section_reasoning_command(args, "adopt", document))
+        return True
+    return False
+
+
 def reviewed_documents(review_output: Path) -> list[str]:
     if not review_output.exists():
         return []
@@ -234,6 +295,12 @@ def main() -> int:
             print("==> DeepSeek WARN review skipped")
 
         run_stage("Final heading quality", heading_quality_command(args, fail_on=args.fail_on, document=document))
+        section_reasoning_adopted = run_section_reasoning(args, document)
+        if section_reasoning_adopted:
+            run_stage(
+                "Final heading quality after section reasoning adoption",
+                heading_quality_command(args, fail_on=args.fail_on, document=document),
+            )
         run_stage("Final output validation", module_cmd("mineru_documents_markdown.validate_outputs", "--output-dir", args.output_dir))
     except PipelineError as exc:
         print(f"Pipeline stopped at stage: {exc.stage}", file=sys.stderr)

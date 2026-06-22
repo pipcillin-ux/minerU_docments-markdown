@@ -62,7 +62,8 @@ docs/
 
 ```text
 解析 -> 输出校验 -> 文档画像/结构诊断 -> 语义重建/章节树回填 -> 标题质量检查
-     -> DeepSeek 复核 WARN -> 定向重建 -> 最终质量检查/输出校验
+     -> DeepSeek 复核 WARN -> 定向重建 -> 最终质量检查
+     -> 可选章节推理/主输出采纳 -> 最终输出校验
 ```
 
 `--fail-on warn` 用于把最终目标收紧到 `0 FAIL / 0 WARN`；如果只希望
@@ -99,6 +100,22 @@ docs/
   --repair-warn-with none \
   --fail-on fail
 ```
+
+如果要把已经复核过的高置信章节推理决策采纳到主输出：
+
+```bash
+.venv/bin/mineru-run-pipeline \
+  --docs-dir docs \
+  --output-dir output \
+  --skip-parse \
+  --skip-review \
+  --repair-warn-with none \
+  --section-reasoning adopt \
+  --section-reasoning-min-confidence 0.82 \
+  --fail-on warn
+```
+
+`adopt` 会先生成 reasoned 候选，再只晋升通过确定性结构校验和采纳后标题质量门的决策。如果质量门失败，会恢复原主输出的 `section_tree.json`、`structured_blocks.jsonl` 和 `<文档名>.semantic.md`。
 
 DeepSeek 复核会从环境变量或 `.env` 读取 `DEEPSEEK_API_KEY` /
 `deepseek_api_key`，并输出：
@@ -368,6 +385,17 @@ output/<文档名>/structured_blocks.reasoned.jsonl
 output/<文档名>/<文档名>.semantic.reasoned.md
 output/<文档名>/section_reasoning_apply_report.md
 ```
+
+将高置信决策采纳到主输出：
+
+```bash
+.venv/bin/mineru-section-reasoning \
+  --mode adopt \
+  --target main \
+  --min-confidence 0.82
+```
+
+adopt 当前只自动晋升 `llm_section_reasoning` 来源的 `insert_child_section` 决策。它会生成 `section_reasoning_adoption_report.md`，检查原文文本未被改写、没有新增章节范围缺陷，并在采纳后出现 FAIL/WARN 时自动回滚。
 
 大文档建议控制单次请求大小：
 

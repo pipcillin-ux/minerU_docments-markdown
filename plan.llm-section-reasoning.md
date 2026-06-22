@@ -213,3 +213,191 @@ Phase 5B：
 - 应用后不得降低现有 heading quality。
 - 回归样本报告能体现 LLM 决策来源和理由。
 - 已用“外科专病中医临床诊治 第3版”的一条高置信 `insert_child_section` 决策验证：原树 347 节点，reasoned 树 348 节点，新增 `llm_sec_000001`，Markdown 渲染为 `### (一)中医`。
+
+## Phase 5C：高质量采纳到主输出计划
+
+状态：已实现。
+
+### 需求分析
+
+当前 `mineru-run-pipeline` 已覆盖确定性主流程：
+
+```text
+parse
+-> validate
+-> profile
+-> build semantic Markdown
+-> heading quality
+-> optional DeepSeek WARN review/rebuild
+-> final heading quality
+-> final validation
+```
+
+章节语义推理层已经具备独立 CLI：
+
+```bash
+.venv/bin/mineru-section-reasoning --mode collect
+.venv/bin/mineru-section-reasoning --mode review
+.venv/bin/mineru-section-reasoning --mode apply
+```
+
+下一步目标不是长期停留在旁路文件，而是把大模型高质量语义推理结果安全采纳到主输出：
+
+- 默认不调用 LLM，不改变现有 `mineru-run-pipeline` 行为。
+- 可选开启 collect/report，用于生成章节结构审计。
+- 可选开启 review，需要 API Key，继续使用缓存和 schema 校验。
+- 可选开启 apply，生成 `.reasoned.*` 候选产物，用于审计和调试。
+- 可选开启 adopt，把通过采纳门的高置信候选晋升为主输出。
+- 单文档运行时尊重 `--document` / `--pdf` 推导出的文档名。
+- 全量运行时只对存在高质量决策且通过校验的文档改写主输出。
+- 主输出采纳不是只看 LLM 自评置信度；必须经过确定性结构校验、质量门和失败回滚。
+
+### 技术路径
+
+#### 1. 章节推理 CLI 增加采纳目标
+
+在 `src/mineru_documents_markdown/section_reasoning.py` 中新增：
+
+```text
+--mode adopt
+--target {sidecar,main}
+--adoption-backup
+```
+
+建议语义：
+
+- `apply`：继续生成 `.reasoned.*` 候选产物，默认不覆盖主输出。
+- `adopt`：先生成 reasoned 候选，再通过采纳门，最后写回主输出。
+- `--target main`：作为 `adopt` 的显式写主输出模式；没有该显式参数时不改主输出。
+
+#### 2. 采纳门
+
+只有同时满足以下条件，才允许写入主输出：
+
+**决策级条件**
+
+- `decision_source == llm_section_reasoning`。
+- `action` 在当前允许自动采纳白名单内。第一版只允许 `insert_child_section`。
+- `confidence >= --min-confidence`，默认不低于 `0.86`。
+- `candidate_id` 完全匹配原候选，候选与当前块仍一致。
+- `target_parent_id` 存在，父节点层级合法，新增层级必须在父节点之下。
+
+**结构级条件**
+
+- 新 section 的 `source_block_id` 必须存在于 `structured_blocks.jsonl`。
+- source block 必须是 `body` 区域、`include_in_semantic != false`。
+- 新节点不能和同父节点已有节点重复。
+- 重算后所有 node range 必须满足：
+  - `start_block_id/end_block_id` 均存在。
+  - `document_order` 与 block 顺序一致。
+  - child range 不越出 parent range。
+  - 无同级范围反向或明显交叉。
+- 目录区、front matter、back matter 不能因为采纳而进入正文树。
+
+**输出级条件**
+
+- 采纳前后原文内容不被 LLM 改写，只允许结构字段、章节树和 Markdown 标题层级变化。
+- 新 `.semantic.md` 必须能由采纳后的 `structured_blocks.jsonl` 和 `section_tree.json` 重新渲染。
+- 写主输出后必须重新运行 `mineru-heading-quality --fail-on warn`，不允许新增 FAIL/WARN。
+- 失败时恢复原 `section_tree.json`、`structured_blocks.jsonl`、`<文档名>.semantic.md`。
+
+#### 3. 主输出写入策略
+
+采用“候选生成 -> 原子晋升 -> 失败回滚”：
+
+```text
+base main outputs
+-> build reasoned candidate in memory / sidecar
+-> run adoption checks
+-> snapshot original main files
+-> write main section_tree.json / structured_blocks.jsonl / semantic.md
+-> run heading quality
+-> pass: keep main outputs and write adoption report
+-> fail: restore snapshots and mark rejected
+```
+
+采纳报告：
+
+```text
+output/<文档名>/section_reasoning_adoption_report.md
+```
+
+报告记录：
+
+- 被采纳的 decision 和 reason。
+- 被拒绝的 decision 和拒绝原因。
+- 采纳前后 node_count、semantic heading 变化。
+- 质量门结果。
+- 是否发生回滚。
+
+#### 4. 接入统一流水线
+
+在 `src/mineru_documents_markdown/run_pipeline.py` 中新增参数：
+
+```text
+--section-reasoning {none,collect,review,apply,adopt}
+--section-reasoning-limit <int>
+--section-reasoning-min-confidence <float>
+--skip-section-reasoning
+```
+
+建议语义：
+
+- `none`：默认值，完全跳过章节语义推理。
+- `collect`：在 final heading quality 通过后运行 `collect` + `report`。
+- `review`：先运行 `collect`，再运行 `review`，最后刷新 `report`。
+- `apply`：先确保有候选；若存在决策则运行 `apply`，生成 reasoned 旁路产物。
+- `adopt`：先确保有候选和决策；运行 `adopt --target main`，通过采纳门后写主输出。
+
+命令阶段建议顺序：
+
+```text
+final heading quality
+-> optional section reasoning collect/review/apply
+-> if adopt: re-run final heading quality after main output promotion
+-> final output validation
+```
+
+原因：
+
+- 章节推理依赖稳定的 `structured_blocks.jsonl`、`section_tree.json`、`toc_tree.json`。
+- apply 只写候选产物，不影响 final validation 对主输出的判断。
+- adopt 会改主输出，因此必须在采纳后再次跑 heading quality 和 validation。
+- review/apply/adopt 出错时应作为独立阶段失败，便于定位。
+
+README 更新：
+
+- 在正式命令示例中增加可选 section reasoning 参数。
+- 明确默认正式命令仍是确定性主流程。
+- 给出带 DeepSeek 复核、reasoned 候选生成和主输出采纳的增强命令。
+
+### 验收
+
+实现后验证：
+
+```bash
+.venv/bin/python -m py_compile src/mineru_documents_markdown/run_pipeline.py
+.venv/bin/mineru-run-pipeline --help
+.venv/bin/mineru-run-pipeline --skip-parse --skip-review --section-reasoning collect --fail-on warn
+.venv/bin/mineru-run-pipeline --skip-parse --skip-review --section-reasoning apply --section-reasoning-min-confidence 0.82 --fail-on warn
+.venv/bin/mineru-run-pipeline --skip-parse --skip-review --section-reasoning adopt --section-reasoning-min-confidence 0.86 --fail-on warn
+.venv/bin/mineru-heading-quality --fail-on warn
+git diff --check
+```
+
+通过标准：
+
+- 默认 `mineru-run-pipeline --skip-parse --skip-review` 行为不变。
+- `collect` 只生成候选和报告，不调用 LLM。
+- `apply` 只生成 `.reasoned.*` 旁路产物。
+- `adopt` 只采纳通过采纳门的高置信 LLM 决策，并写入主输出。
+- 若采纳后质量门失败，主输出自动回滚。
+- 全量 heading quality 保持 `0 FAIL / 0 WARN`。
+
+实现备注：
+
+- `adopt` 已接入 `mineru-run-pipeline --section-reasoning adopt`，采纳后会再次运行 final heading quality。
+- `section_reasoning adopt --target main` 会写主 `section_tree.json`、`structured_blocks.jsonl`、`<文档名>.semantic.md`，并生成 `section_reasoning_adoption_report.md`。
+- 采纳门会比较 base 与 reasoned 的结构问题，只阻断新增结构问题，避免历史基线问题误杀。
+- 修复了 `attach_section_tree` 中 page fallback 抢过 index range 的问题：存在精确 index 匹配时不再使用页码兜底匹配。
+- LLM 插入的小节遇到后续同级/更高级正文 heading 时会提前截断 range，避免 `(一)` 小节吞掉 `(二)` 或下一节。

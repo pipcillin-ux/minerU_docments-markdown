@@ -67,7 +67,8 @@ The pipeline runs:
 
 ```text
 parse -> validate -> profile -> semantic rebuild / section-tree assignment -> heading quality
-      -> DeepSeek WARN review -> targeted rebuild -> final quality/validate
+      -> DeepSeek WARN review -> targeted rebuild -> final quality
+      -> optional section reasoning/adoption -> final validate
 ```
 
 `--fail-on warn` enforces a final `0 FAIL / 0 WARN` target. Use
@@ -106,6 +107,26 @@ To avoid DeepSeek/OpenAI-compatible review calls and only run local rules:
   --repair-warn-with none \
   --fail-on fail
 ```
+
+To adopt already-reviewed high-confidence section reasoning decisions into the
+main outputs:
+
+```bash
+.venv/bin/mineru-run-pipeline \
+  --docs-dir docs \
+  --output-dir output \
+  --skip-parse \
+  --skip-review \
+  --repair-warn-with none \
+  --section-reasoning adopt \
+  --section-reasoning-min-confidence 0.82 \
+  --fail-on warn
+```
+
+`adopt` first generates reasoned candidates, then promotes only decisions that
+pass deterministic structural checks and a post-adoption heading-quality gate.
+If the gate fails, the primary `section_tree.json`, `structured_blocks.jsonl`,
+and `<document-name>.semantic.md` files are restored.
 
 DeepSeek review reads `DEEPSEEK_API_KEY` or `deepseek_api_key` from the
 environment or `.env`. It writes review overrides to:
@@ -420,6 +441,20 @@ output/<document-name>/structured_blocks.reasoned.jsonl
 output/<document-name>/<document-name>.semantic.reasoned.md
 output/<document-name>/section_reasoning_apply_report.md
 ```
+
+Adopt high-confidence decisions into the main outputs:
+
+```bash
+.venv/bin/mineru-section-reasoning \
+  --mode adopt \
+  --target main \
+  --min-confidence 0.82
+```
+
+Adopt mode currently promotes only `insert_child_section` decisions from
+`llm_section_reasoning`. It writes `section_reasoning_adoption_report.md`,
+checks that source text is unchanged, prevents new section-range defects, and
+rolls back if the adopted document produces FAIL/WARN heading-quality issues.
 
 For large documents, keep requests small:
 
