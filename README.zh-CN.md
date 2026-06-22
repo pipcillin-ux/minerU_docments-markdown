@@ -12,7 +12,7 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
-安装后会得到 6 个命令：
+安装后会得到 7 个命令：
 
 ```text
 mineru-batch-parse
@@ -20,6 +20,7 @@ mineru-validate-outputs
 mineru-profile-documents
 mineru-build-structured-blocks
 mineru-heading-quality
+mineru-build-regression-fixtures
 mineru-run-pipeline
 ```
 
@@ -370,6 +371,21 @@ output/<文档名>/heading_quality.md
   --llm-batch-size 5 \
   --fail-on fail
 ```
+
+从当前语料生成紧凑回归样本：
+
+```bash
+.venv/bin/mineru-build-regression-fixtures
+```
+
+该命令会输出：
+
+```text
+output/regression_fixtures/structure_regression_samples.json
+output/regression_fixtures/structure_regression_samples.md
+```
+
+样本覆盖目录/正文边界、TOC-backbone 与正文标题章节树、正文块挂树、标题拆分/合并、长编号正文句降级、Markdown 标题层级由树反写等典型结构问题。
 
 ## 注意事项
 

@@ -425,12 +425,21 @@ src/mineru_documents_markdown/section_tree_quality.py
   - 图表引用尾巴
   - 问句型复习题
   - 无 TOC 文档
+- 新增 `mineru-build-regression-fixtures`，从当前 `output/` 自动抽取紧凑结构样本，避免长期手工维护大体量 fixture。
+
+产物：
+
+```text
+output/regression_fixtures/structure_regression_samples.json
+output/regression_fixtures/structure_regression_samples.md
+```
 
 验收：
 
 ```bash
 .venv/bin/python -m pytest
 .venv/bin/mineru-run-pipeline --skip-parse --skip-review --fail-on warn
+.venv/bin/mineru-build-regression-fixtures
 ```
 
 ## 风险与控制

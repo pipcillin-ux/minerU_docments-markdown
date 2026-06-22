@@ -17,7 +17,7 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
-This installs 6 CLI commands:
+This installs 7 CLI commands:
 
 ```text
 mineru-batch-parse
@@ -25,6 +25,7 @@ mineru-validate-outputs
 mineru-profile-documents
 mineru-build-structured-blocks
 mineru-heading-quality
+mineru-build-regression-fixtures
 mineru-run-pipeline
 ```
 
@@ -422,6 +423,23 @@ Use the formal pipeline for a stricter workflow:
   --llm-batch-size 5 \
   --fail-on fail
 ```
+
+Build compact regression fixtures from the current corpus:
+
+```bash
+.venv/bin/mineru-build-regression-fixtures
+```
+
+This writes representative structure samples to:
+
+```text
+output/regression_fixtures/structure_regression_samples.json
+output/regression_fixtures/structure_regression_samples.md
+```
+
+The fixtures cover TOC/body boundaries, TOC-backed and body-heading section
+trees, block-to-section attachment, split/merged headings, numbered prose
+demotion, and tree-driven Markdown heading rendering.
 
 ## Notes
 
