@@ -281,6 +281,7 @@ This writes:
 
 ```text
 output/<document-name>/toc_tree.json
+output/<document-name>/section_tree.json
 output/<document-name>/heading_candidates.jsonl
 output/<document-name>/heading_decisions.jsonl
 output/<document-name>/heading_diagnostics.json
@@ -300,6 +301,10 @@ Recommended usage:
   better suited for RAG.
 - `toc_tree.json`: best-effort table-of-contents tree with parent paths and
   page hints.
+- `section_tree.json`: sidecar body section tree. It prefers body headings for
+  parent/child recovery and falls back to the TOC backbone when body headings
+  are too sparse. Later phases can use it as the authoritative source for
+  Markdown heading levels and RAG chunk paths.
 - `heading_candidates.jsonl`: local heading candidates with layout and text
   signals.
 - `heading_decisions.jsonl`: audited heading repair decisions. Actions include
@@ -317,6 +322,9 @@ The semantic rebuild now handles the main structure-drift cases explicitly:
 - Heading levels: `toc_tree.json` and numbering patterns drive level inference.
   Same-pattern sibling headings are checked for consistency so one logical
   level does not drift between H1/H2/H3.
+- Section tree: `section_tree.json` records the long-term body parent/child
+  structure. In the current phase it is a sidecar quality-gated artifact and
+  does not change `.semantic.md` heading rendering yet.
 - Broken headings: split chapter titles can be conservatively merged, while
   glued "heading + prose" or "heading + table/figure reference tail" text is
   split back into heading and body content.

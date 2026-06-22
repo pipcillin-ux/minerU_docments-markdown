@@ -377,6 +377,232 @@ def check_decisions(decisions: list[dict[str, Any]]) -> list[HeadingIssue]:
     return issues
 
 
+def check_section_tree(section_payload: dict[str, Any], blocks: list[dict[str, Any]]) -> list[HeadingIssue]:
+    issues: list[HeadingIssue] = []
+    if section_payload.get("_missing"):
+        return [
+            HeadingIssue(
+                code="section_tree_missing",
+                severity="WARN",
+                message="section_tree.json was not found.",
+                suggestion="Run mineru-build-structured-blocks to generate the section tree.",
+            )
+        ]
+    if section_payload.get("_invalid"):
+        return [
+            HeadingIssue(
+                code="section_tree_invalid_json",
+                severity="FAIL",
+                message="section_tree.json could not be parsed as JSON.",
+                suggestion="Rebuild semantic blocks and section_tree.json.",
+            )
+        ]
+
+    nodes = section_payload.get("nodes") or []
+    tree_source = str(section_payload.get("source") or "")
+    if section_payload.get("node_count") != len(nodes):
+        issues.append(
+            HeadingIssue(
+                code="section_tree_node_count_mismatch",
+                severity="FAIL",
+                message="section_tree.json node_count does not match the nodes array length.",
+                suggestion="Rebuild section_tree.json.",
+            )
+        )
+
+    block_index_by_id = {str(block.get("block_id") or ""): index for index, block in enumerate(blocks)}
+    first_tree_index: int | None = None
+    for node in nodes:
+        source_block_id = str(node.get("source_block_id") or "")
+        block_index = block_index_by_id.get(source_block_id)
+        if block_index is not None:
+            first_tree_index = block_index if first_tree_index is None else min(first_tree_index, block_index)
+    body_headings = []
+    for index, block in enumerate(blocks):
+        if (
+            block.get("block_type") == "heading"
+            and block.get("region") == "body"
+            and block.get("include_in_semantic") is not False
+            and (first_tree_index is None or index >= first_tree_index)
+        ):
+            body_headings.append(block)
+    if body_headings and not nodes:
+        issues.append(
+            HeadingIssue(
+                code="section_tree_empty",
+                severity="FAIL",
+                message="Body headings exist but section_tree.json has no nodes.",
+                suggestion="Inspect section tree construction inputs.",
+            )
+        )
+
+    ids: set[str] = set()
+    duplicate_ids: set[str] = set()
+    node_by_id: dict[str, dict[str, Any]] = {}
+    block_ids = set(block_index_by_id)
+    for node in nodes:
+        section_id = str(node.get("section_id") or "")
+        if not section_id:
+            issues.append(
+                HeadingIssue(
+                    code="section_tree_missing_id",
+                    severity="FAIL",
+                    message="Section tree node is missing section_id.",
+                    text=str(node.get("title") or "")[:180],
+                    suggestion="Rebuild section_tree.json with stable node IDs.",
+                )
+            )
+            continue
+        if section_id in ids:
+            duplicate_ids.add(section_id)
+        ids.add(section_id)
+        node_by_id[section_id] = node
+
+    for section_id in sorted(duplicate_ids):
+        issues.append(
+            HeadingIssue(
+                code="section_tree_duplicate_id",
+                severity="FAIL",
+                message="section_tree.json contains duplicate section_id values.",
+                text=section_id,
+                suggestion="Regenerate section IDs from document order.",
+            )
+        )
+
+    for node in nodes:
+        section_id = str(node.get("section_id") or "")
+        title = str(node.get("title") or "")
+        try:
+            level = int(node.get("level") or 0)
+        except (TypeError, ValueError):
+            level = 0
+        if level < 1 or level > 6:
+            issues.append(
+                HeadingIssue(
+                    code="section_tree_invalid_level",
+                    severity="FAIL",
+                    message="Section tree node has an invalid level.",
+                    page=node.get("start_page"),
+                    text=title[:180],
+                    block_id=str(node.get("source_block_id") or ""),
+                    suggestion="Clamp section tree levels to H1-H6.",
+                )
+            )
+        if str(node.get("region") or "") == "toc":
+            issues.append(
+                HeadingIssue(
+                    code="toc_region_in_section_tree",
+                    severity="FAIL",
+                    message="TOC-region heading entered the body section tree.",
+                    page=node.get("start_page"),
+                    text=title[:180],
+                    block_id=str(node.get("source_block_id") or ""),
+                    suggestion="Exclude TOC region blocks before section tree construction.",
+                )
+            )
+        parent_id = node.get("parent_id")
+        if parent_id:
+            parent = node_by_id.get(str(parent_id))
+            if parent is None:
+                issues.append(
+                    HeadingIssue(
+                        code="section_tree_orphan_node",
+                        severity="FAIL",
+                        message="Section tree node references a missing parent_id.",
+                        page=node.get("start_page"),
+                        text=title[:180],
+                        block_id=str(node.get("source_block_id") or ""),
+                        suggestion="Choose parents from existing earlier section nodes.",
+                    )
+                )
+            else:
+                try:
+                    parent_level = int(parent.get("level") or 0)
+                except (TypeError, ValueError):
+                    parent_level = 0
+                if parent_level >= level:
+                    issues.append(
+                        HeadingIssue(
+                            code="section_tree_level_order_invalid",
+                            severity="FAIL",
+                            message="Child section level is not deeper than its parent.",
+                            page=node.get("start_page"),
+                            text=title[:180],
+                            block_id=str(node.get("source_block_id") or ""),
+                            suggestion="Pop the section stack until the parent level is shallower.",
+                        )
+                    )
+        start_page = node.get("start_page")
+        end_page = node.get("end_page")
+        if isinstance(start_page, int) and isinstance(end_page, int) and end_page < start_page:
+            issues.append(
+                HeadingIssue(
+                    code="section_tree_page_range_invalid",
+                    severity="FAIL",
+                    message="Section tree node has an invalid page range.",
+                    page=start_page,
+                    text=title[:180],
+                    block_id=str(node.get("source_block_id") or ""),
+                    suggestion="Recompute section end pages from the next same-or-higher level heading.",
+                )
+            )
+        source_block_id = str(node.get("source_block_id") or "")
+        if source_block_id and source_block_id not in block_ids:
+            issues.append(
+                HeadingIssue(
+                    code="section_tree_source_block_missing",
+                    severity="FAIL",
+                    message="Section tree node points to a block_id not found in structured_blocks.jsonl.",
+                    page=node.get("start_page"),
+                    text=title[:180],
+                    block_id=source_block_id,
+                    suggestion="Build the section tree from the same structured block list that is written to disk.",
+                )
+            )
+
+    for node in nodes:
+        section_id = str(node.get("section_id") or "")
+        seen: set[str] = set()
+        parent_id = str(node.get("parent_id") or "")
+        while parent_id:
+            if parent_id in seen or parent_id == section_id:
+                issues.append(
+                    HeadingIssue(
+                        code="section_tree_cycle",
+                        severity="FAIL",
+                        message="Section tree contains a parent cycle.",
+                        page=node.get("start_page"),
+                        text=str(node.get("title") or "")[:180],
+                        block_id=str(node.get("source_block_id") or ""),
+                        suggestion="Rebuild parent links from document-order stack state.",
+                    )
+                )
+                break
+            seen.add(parent_id)
+            parent = node_by_id.get(parent_id)
+            if not parent:
+                break
+            parent_id = str(parent.get("parent_id") or "")
+
+    if tree_source == "body_headings":
+        section_source_blocks = {str(node.get("source_block_id") or "") for node in nodes}
+        for block in body_headings:
+            block_id = str(block.get("block_id") or "")
+            if block_id and block_id not in section_source_blocks:
+                issues.append(
+                    HeadingIssue(
+                        code="heading_not_in_section_tree",
+                        severity="FAIL",
+                        message="Body heading was not represented in section_tree.json.",
+                        page=block.get("page"),
+                        text=str(block.get("text") or "")[:180],
+                        block_id=block_id,
+                        suggestion="Use all body semantic headings as section tree nodes in Phase 1.",
+                    )
+                )
+    return issues
+
+
 def check_sibling_consistency(blocks: list[dict[str, Any]]) -> list[HeadingIssue]:
     issues: list[HeadingIssue] = []
     grouped: dict[tuple[str, ...], list[dict[str, Any]]] = defaultdict(list)
@@ -465,12 +691,18 @@ def check_sibling_consistency(blocks: list[dict[str, Any]]) -> list[HeadingIssue
 
 def quality_for_output_dir(out_dir: Path) -> tuple[dict[str, Any], list[HeadingIssue]]:
     toc_payload = load_json(out_dir / "toc_tree.json", {"nodes": []})
+    section_tree_path = out_dir / "section_tree.json"
+    section_payload = load_json(
+        section_tree_path,
+        {"_invalid": True},
+    ) if section_tree_path.exists() else {"_missing": True}
     blocks = load_jsonl(out_dir / "structured_blocks.jsonl")
     decisions = load_jsonl(out_dir / "heading_decisions.jsonl")
     issues: list[HeadingIssue] = []
     issues.extend(check_toc_tree(out_dir, toc_payload))
     issues.extend(check_structured_blocks(blocks, toc_payload))
     issues.extend(check_decisions(decisions))
+    issues.extend(check_section_tree(section_payload, blocks))
     issues.extend(check_sibling_consistency(blocks))
     counts = issue_counts(issues)
     status = "OK"
@@ -482,6 +714,7 @@ def quality_for_output_dir(out_dir: Path) -> tuple[dict[str, Any], list[HeadingI
         "document": out_dir.name,
         "status": status,
         "toc_node_count": len(toc_payload.get("nodes") or []),
+        "section_tree_node_count": len(section_payload.get("nodes") or []),
         "structured_block_count": len(blocks),
         "heading_decision_count": len(decisions),
         "issue_counts": counts,
@@ -496,6 +729,7 @@ def write_markdown_report(out_dir: Path, summary: dict[str, Any], issues: list[H
         "",
         f"- 状态：{summary['status']}",
         f"- 目录节点：{summary['toc_node_count']}",
+        f"- 章节树节点：{summary['section_tree_node_count']}",
         f"- 结构块：{summary['structured_block_count']}",
         f"- 标题决策：{summary['heading_decision_count']}",
         f"- FAIL：{summary['issue_counts']['FAIL']}",
@@ -545,6 +779,7 @@ def main() -> int:
                 "document": summary["document"],
                 "status": summary["status"],
                 "toc_nodes": summary["toc_node_count"],
+                "section_tree_nodes": summary["section_tree_node_count"],
                 "structured_blocks": summary["structured_block_count"],
                 "heading_decisions": summary["heading_decision_count"],
                 "fail": counts["FAIL"],

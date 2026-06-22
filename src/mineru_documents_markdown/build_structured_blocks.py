@@ -14,6 +14,7 @@ from .heading_candidates import block_id as make_block_id
 from .heading_candidates import extract_heading_candidates, write_heading_candidates
 from .heading_decisions import HeadingDecision, build_rule_decisions, split_heading_text, write_heading_decisions
 from .llm_heading_assist import maybe_assist_decisions
+from .section_tree import build_section_tree, write_section_tree
 from .structure_utils import (
     classify_item_regions,
     classify_page_regions,
@@ -519,6 +520,7 @@ def build_for_output_dir(
     page_regions = classify_page_regions(out_dir)
     repeated_margins = repeated_margin_texts(out_dir)
     toc_nodes = parse_toc_tree(raw_wrapped_items)
+    toc_node_dicts = [node.to_dict() for node in toc_nodes]
     toc_levels = toc_level_map(toc_nodes)
     toc_paths = toc_path_map(toc_nodes)
     wrapped_items = merge_broken_heading_items(raw_wrapped_items, toc_levels)
@@ -536,7 +538,7 @@ def build_for_output_dir(
         rule_decisions,
         toc_levels,
         toc_paths,
-        [node.to_dict() for node in toc_nodes],
+        toc_node_dicts,
         heading_strategy,
         out_dir / ".heading_llm_cache",
         threshold=llm_confidence_threshold,
@@ -780,8 +782,12 @@ def build_for_output_dir(
                     semantic_lines.extend([content.strip(), ""])
             semantic_count += 1
 
+    section_tree_payload = build_section_tree(out_dir.name, structured_blocks, toc_node_dicts)
+    write_section_tree(out_dir / "section_tree.json", section_tree_payload)
+
     diagnostics = heading_diagnostics(structured_blocks, decisions)
     diagnostics["toc_node_count"] = len(toc_nodes)
+    diagnostics["section_tree_node_count"] = section_tree_payload["node_count"]
     diagnostics["heading_candidate_count"] = len(candidates)
     diagnostics["heading_strategy"] = heading_strategy
     (out_dir / "heading_diagnostics.json").write_text(
