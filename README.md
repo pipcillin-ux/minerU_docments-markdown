@@ -17,7 +17,7 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
-This installs 7 CLI commands:
+This installs 8 CLI commands:
 
 ```text
 mineru-batch-parse
@@ -26,6 +26,7 @@ mineru-profile-documents
 mineru-build-structured-blocks
 mineru-heading-quality
 mineru-build-regression-fixtures
+mineru-section-reasoning
 mineru-run-pipeline
 ```
 
@@ -379,6 +380,27 @@ tree conflicts, such as repeated subsection titles, TOC/body disagreement, or
 missing explicit headings. That pass should use small context windows,
 schema-validated actions, cached outputs, and quality gates; it should not
 rewrite source text or replace the deterministic pipeline.
+
+Collect local section-reasoning candidates without calling an LLM:
+
+```bash
+.venv/bin/mineru-section-reasoning --mode collect --limit 200
+.venv/bin/mineru-section-reasoning --mode report
+```
+
+Review those candidates with DeepSeek/OpenAI-compatible JSON responses:
+
+```bash
+.venv/bin/mineru-section-reasoning --mode review --limit 20
+```
+
+This writes sidecar audit files only:
+
+```text
+output/<document-name>/section_reasoning_candidates.jsonl
+output/<document-name>/section_reasoning_decisions.jsonl
+output/<document-name>/section_reasoning_report.md
+```
 
 For large documents, keep requests small:
 

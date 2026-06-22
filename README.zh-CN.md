@@ -12,7 +12,7 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
-安装后会得到 7 个命令：
+安装后会得到 8 个命令：
 
 ```text
 mineru-batch-parse
@@ -21,6 +21,7 @@ mineru-profile-documents
 mineru-build-structured-blocks
 mineru-heading-quality
 mineru-build-regression-fixtures
+mineru-section-reasoning
 mineru-run-pipeline
 ```
 
@@ -331,6 +332,27 @@ export DEEPSEEK_MODEL="deepseek-chat"
 大模型只会收到标题候选和少量局部上下文，不会被要求重写整本文档。如果没有配置 API Key、请求超时或返回 JSON 不合法，程序会回退到本地规则决策。
 
 长期设计也允许后续加入章节关系的大模型语义推理层，用于处理重复小节名、TOC 与正文冲突、缺失显式标题等局部树结构问题。该层应只接收小窗口上下文，输出 schema 校验后的动作，结果可缓存、可审计、可回退；不能直接改写原文，也不能替代确定性主流程。
+
+不调用大模型，仅收集章节语义推理候选：
+
+```bash
+.venv/bin/mineru-section-reasoning --mode collect --limit 200
+.venv/bin/mineru-section-reasoning --mode report
+```
+
+使用 DeepSeek/OpenAI-compatible JSON 响应复核候选：
+
+```bash
+.venv/bin/mineru-section-reasoning --mode review --limit 20
+```
+
+该命令只写旁路审计文件：
+
+```text
+output/<文档名>/section_reasoning_candidates.jsonl
+output/<文档名>/section_reasoning_decisions.jsonl
+output/<文档名>/section_reasoning_report.md
+```
 
 大文档建议控制单次请求大小：
 

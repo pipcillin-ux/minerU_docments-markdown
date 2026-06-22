@@ -38,14 +38,19 @@ def cache_key(payload: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def call_chat_completions(payload: dict[str, Any], timeout: int = 90, retries: int = 2) -> dict[str, Any]:
+def call_chat_completions(
+    payload: dict[str, Any],
+    timeout: int = 90,
+    retries: int = 2,
+    system_prompt: str = SYSTEM_PROMPT,
+) -> dict[str, Any]:
     api_key, base_url, model = api_config()
     if not api_key:
         raise RuntimeError("DEEPSEEK_API_KEY or OPENAI_API_KEY is not set.")
     body = {
         "model": model,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ],
         "temperature": 0,
