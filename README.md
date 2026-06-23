@@ -429,12 +429,14 @@ documents already adopted into the main outputs.
 Review those candidates with DeepSeek/OpenAI-compatible JSON responses:
 
 ```bash
-.venv/bin/mineru-section-reasoning --mode review --limit 20
+.venv/bin/mineru-section-reasoning --mode review --limit 80 --review-jobs 4
 ```
 
 Review mode is incremental by default: it skips candidates already present in
 `section_reasoning_decisions.jsonl`, merges new decisions into the existing
 decision file, and only re-reviews cached candidates when `--force` is passed.
+`--review-jobs` parallelizes only the API review calls; candidate selection and
+decision-file writes remain serial to avoid duplicate or racy updates.
 
 Collect/review writes sidecar audit files only:
 

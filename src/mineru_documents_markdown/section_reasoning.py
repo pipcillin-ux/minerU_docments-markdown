@@ -8,6 +8,7 @@ import csv
 import json
 import os
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--adoption-backup", action="store_true", help="Write .pre-adopt backup files.")
     parser.add_argument("--force", action="store_true", help="Ignore cached LLM review responses.")
+    parser.add_argument(
+        "--review-jobs",
+        type=int,
+        default=1,
+        help="Parallel LLM review workers. Decisions are still merged serially.",
+    )
     return parser.parse_args()
 
 
@@ -685,9 +692,37 @@ def review_mode(args: argparse.Namespace) -> int:
         return 2
 
     by_dir: dict[Path, list[dict[str, Any]]] = defaultdict(list)
-    for index, (out_dir, candidate) in enumerate(candidates, start=1):
-        print(f"[{index}/{len(candidates)}] Reviewing {candidate.get('document')} {candidate.get('candidate_type')}")
-        by_dir[out_dir].append(review_candidate(out_dir, candidate, args.force))
+    jobs = max(1, int(args.review_jobs or 1))
+    ordered_results: list[tuple[Path, dict[str, Any]] | None] = [None] * len(candidates)
+    if jobs == 1:
+        for index, (out_dir, candidate) in enumerate(candidates, start=1):
+            print(f"[{index}/{len(candidates)}] Reviewing {candidate.get('document')} {candidate.get('candidate_type')}")
+            ordered_results[index - 1] = (out_dir, review_candidate(out_dir, candidate, args.force))
+    else:
+        print(f"Reviewing {len(candidates)} candidate(s) with {jobs} worker(s).")
+        with ThreadPoolExecutor(max_workers=jobs) as executor:
+            future_map = {
+                executor.submit(review_candidate, out_dir, candidate, args.force): (index, out_dir, candidate)
+                for index, (out_dir, candidate) in enumerate(candidates, start=1)
+            }
+            for done_count, future in enumerate(as_completed(future_map), start=1):
+                index, out_dir, candidate = future_map[future]
+                try:
+                    decision = future.result()
+                except Exception as exc:  # noqa: BLE001 - defensive fallback; review_candidate normally catches.
+                    input_hash = cache_key(review_payload(candidate))
+                    decision = uncertain_decision(candidate, input_hash, f"Parallel LLM review failed: {exc}")
+                ordered_results[index - 1] = (out_dir, decision)
+                print(
+                    f"[{done_count}/{len(candidates)}] Reviewed "
+                    f"{candidate.get('document')} {candidate.get('candidate_type')}"
+                )
+
+    for item in ordered_results:
+        if item is None:
+            continue
+        out_dir, decision = item
+        by_dir[out_dir].append(decision)
 
     for out_dir, decisions in by_dir.items():
         existing = load_jsonl(decision_path(out_dir))

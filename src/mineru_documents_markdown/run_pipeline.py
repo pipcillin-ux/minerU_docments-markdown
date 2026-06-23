@@ -78,6 +78,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-section-reasoning", action="store_true", help="Skip optional section reasoning.")
     parser.add_argument("--section-reasoning-limit", type=int, help="Maximum section-reasoning candidates to process.")
     parser.add_argument(
+        "--section-reasoning-review-jobs",
+        type=int,
+        default=1,
+        help="Parallel LLM workers for section reasoning review.",
+    )
+    parser.add_argument(
         "--section-reasoning-min-confidence",
         type=float,
         help="Minimum section-reasoning confidence for apply/adopt.",
@@ -219,6 +225,8 @@ def section_reasoning_command(args: argparse.Namespace, mode: str, document: str
         cmd.extend(["--document", document])
     if args.section_reasoning_limit is not None and mode in {"collect", "review"}:
         cmd.extend(["--limit", str(args.section_reasoning_limit)])
+    if mode == "review" and args.section_reasoning_review_jobs:
+        cmd.extend(["--review-jobs", str(args.section_reasoning_review_jobs)])
     if args.section_reasoning_min_confidence is not None and mode in {"summary", "apply", "adopt"}:
         cmd.extend(["--min-confidence", str(args.section_reasoning_min_confidence)])
     if mode == "adopt":
