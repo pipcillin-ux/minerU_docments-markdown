@@ -422,9 +422,9 @@ output/section_reasoning_summary.md
 ```
 
 The summary reports candidate counts, reviewed decisions, high-confidence
-insert decisions, adoption-ready decisions, main-output LLM reasoning nodes,
-documents still waiting for review, and documents already adopted into the main
-outputs.
+insert decisions, structurally adoption-ready decisions, orphan audit decisions,
+main-output LLM reasoning nodes, documents still waiting for review, and
+documents already adopted into the main outputs.
 
 Review those candidates with DeepSeek/OpenAI-compatible JSON responses:
 
@@ -476,6 +476,8 @@ Adopt mode currently promotes only `insert_child_section` decisions from
 `llm_section_reasoning`. It writes `section_reasoning_adoption_report.md`,
 checks that source text is unchanged, prevents new section-range defects, and
 rolls back if the adopted document produces FAIL/WARN heading-quality issues.
+Rerunning adopt is idempotent for documents that have no new adoptable
+decisions.
 
 For large documents, keep requests small:
 

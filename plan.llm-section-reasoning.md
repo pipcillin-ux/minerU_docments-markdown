@@ -420,6 +420,7 @@ DeepSeek、哪些文档已有高质量决策但还没采纳、哪些文档已经
 - 输出全库级 CSV 和 Markdown 汇总，作为批量 review/adopt 的操作面板。
 - 统一流水线启用 `--section-reasoning collect|review|apply|adopt` 时，也会在对应阶段之后自动刷新全库 summary。
 - `review --limit` 默认增量推进：跳过已有决策的候选，合并写回新决策，避免重复复核同一批候选。
+- summary 的 `adoption_ready` 已纳入结构门校验；adopt 对没有新增可采纳决策的文档保持幂等。
 
 ### 技术路径
 

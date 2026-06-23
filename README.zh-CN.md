@@ -369,8 +369,8 @@ output/section_reasoning_summary.csv
 output/section_reasoning_summary.md
 ```
 
-汇总报告会列出候选数量、已复核决策、高置信插入决策、当前可采纳决策、
-主输出中已经采纳的 LLM 推理节点、仍待复核的文档和已经进入主输出的文档。
+汇总报告会列出候选数量、已复核决策、高置信插入决策、通过结构门的当前可采纳决策、
+历史孤立审计决策、主输出中已经采纳的 LLM 推理节点、仍待复核的文档和已经进入主输出的文档。
 
 使用 DeepSeek/OpenAI-compatible JSON 响应复核候选：
 
@@ -414,6 +414,7 @@ output/<文档名>/section_reasoning_apply_report.md
 ```
 
 adopt 当前只自动晋升 `llm_section_reasoning` 来源的 `insert_child_section` 决策。它会生成 `section_reasoning_adoption_report.md`，检查原文文本未被改写、没有新增章节范围缺陷，并在采纳后出现 FAIL/WARN 时自动回滚。
+对没有新增可采纳决策的文档，重复运行 adopt 是幂等的，不会把已处理文档误判为失败。
 
 大文档建议控制单次请求大小：
 

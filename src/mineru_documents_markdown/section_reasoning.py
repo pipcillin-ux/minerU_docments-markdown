@@ -769,13 +769,21 @@ def high_confidence_insert_count(decisions: list[dict[str, Any]], min_confidence
 def summarize_document(out_dir: Path, *, min_confidence: float) -> dict[str, Any]:
     candidates = load_jsonl(candidate_path(out_dir))
     decisions = load_jsonl(decision_path(out_dir))
+    current_candidate_ids = {str(candidate.get("candidate_id") or "") for candidate in candidates}
+    current_decisions = [
+        decision
+        for decision in decisions
+        if str(decision.get("candidate_id") or "") in current_candidate_ids
+    ]
+    orphan_decision_count = len(decisions) - len(current_decisions)
     candidate_counts = Counter(str(candidate.get("candidate_type") or "") for candidate in candidates)
-    decision_counts = Counter(str(decision.get("action") or "") for decision in decisions)
+    decision_counts = Counter(str(decision.get("action") or "") for decision in current_decisions)
     adoption_report = adoption_report_path(out_dir)
 
     adoption_ready = 0
     adoption_check_rejected = 0
     adoption_check_status = ""
+    adoption_structural_issues = 0
     if decisions:
         result = build_reasoned_candidate_for_document(
             out_dir,
@@ -783,12 +791,19 @@ def summarize_document(out_dir: Path, *, min_confidence: float) -> dict[str, Any
             require_llm_source=True,
         )
         adoption_check_status = str(result.get("status") or "")
-        adoption_ready = len(result.get("applied") or [])
+        applied_count = len(result.get("applied") or [])
         adoption_check_rejected = len(result.get("rejected") or [])
+        if applied_count:
+            structural_issues = validate_reasoned_adoption(out_dir, result)
+            adoption_structural_issues = len(structural_issues)
+            if structural_issues:
+                adoption_check_status = "structural_blocked"
+            else:
+                adoption_ready = applied_count
 
     main_reasoning_nodes = reasoning_node_count(main_section_tree_path(out_dir))
     sidecar_reasoning_nodes = reasoning_node_count(reasoned_section_tree_path(out_dir))
-    decision_count = len(decisions)
+    decision_count = len(current_decisions)
     candidate_count = len(candidates)
     review_needed = candidate_count > decision_count
     main_adoption_pending = adoption_ready > 0
@@ -797,12 +812,14 @@ def summarize_document(out_dir: Path, *, min_confidence: float) -> dict[str, Any
         "document": out_dir.name,
         "candidates": candidate_count,
         "decisions": decision_count,
+        "orphan_decisions": orphan_decision_count,
         "candidate_types": format_counter(candidate_counts),
         "decision_actions": format_counter(decision_counts),
-        "high_confidence_insert_decisions": high_confidence_insert_count(decisions, min_confidence),
+        "high_confidence_insert_decisions": high_confidence_insert_count(current_decisions, min_confidence),
         "adoption_check_status": adoption_check_status,
         "adoption_ready": adoption_ready,
         "adoption_check_rejected": adoption_check_rejected,
+        "adoption_structural_issues": adoption_structural_issues,
         "main_reasoning_nodes": main_reasoning_nodes,
         "sidecar_reasoning_nodes": sidecar_reasoning_nodes,
         "adoption_report_status": parse_report_bullet(adoption_report, "Status"),
@@ -821,12 +838,14 @@ def write_summary_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "document",
         "candidates",
         "decisions",
+        "orphan_decisions",
         "candidate_types",
         "decision_actions",
         "high_confidence_insert_decisions",
         "adoption_check_status",
         "adoption_ready",
         "adoption_check_rejected",
+        "adoption_structural_issues",
         "main_reasoning_nodes",
         "sidecar_reasoning_nodes",
         "adoption_report_status",
@@ -859,8 +878,10 @@ def summary_table(rows: list[dict[str, Any]], columns: list[tuple[str, str]], li
 def write_summary_report(path: Path, rows: list[dict[str, Any]], *, min_confidence: float) -> None:
     total_candidates = sum(int(row.get("candidates") or 0) for row in rows)
     total_decisions = sum(int(row.get("decisions") or 0) for row in rows)
+    total_orphans = sum(int(row.get("orphan_decisions") or 0) for row in rows)
     total_high_conf = sum(int(row.get("high_confidence_insert_decisions") or 0) for row in rows)
     total_ready = sum(int(row.get("adoption_ready") or 0) for row in rows)
+    total_structural_issues = sum(int(row.get("adoption_structural_issues") or 0) for row in rows)
     total_main_nodes = sum(int(row.get("main_reasoning_nodes") or 0) for row in rows)
     review_queue = [row for row in rows if row.get("review_needed")]
     adoption_queue = [row for row in rows if int(row.get("adoption_ready") or 0) > 0]
@@ -890,8 +911,10 @@ def write_summary_report(path: Path, rows: list[dict[str, Any]], *, min_confiden
         f"- Documents scanned: {len(rows)}",
         f"- Candidates: {total_candidates}",
         f"- Decisions: {total_decisions}",
+        f"- Orphan decisions: {total_orphans}",
         f"- High-confidence insert decisions: {total_high_conf}",
         f"- Adoption-ready decisions: {total_ready}",
+        f"- Adoption structural issues: {total_structural_issues}",
         f"- Main-output LLM reasoning nodes: {total_main_nodes}",
         "",
         "## Recommended Next Commands",
@@ -914,6 +937,7 @@ def write_summary_report(path: Path, rows: list[dict[str, Any]], *, min_confiden
                 ("Document", "document"),
                 ("Candidates", "candidates"),
                 ("Decisions", "decisions"),
+                ("Orphans", "orphan_decisions"),
                 ("Candidate Types", "candidate_types"),
             ],
             limit=30,
@@ -927,6 +951,7 @@ def write_summary_report(path: Path, rows: list[dict[str, Any]], *, min_confiden
             [
                 ("Document", "document"),
                 ("Ready", "adoption_ready"),
+                ("Structural Issues", "adoption_structural_issues"),
                 ("Rejected By Check", "adoption_check_rejected"),
                 ("Actions", "decision_actions"),
             ],
@@ -954,6 +979,7 @@ def write_summary_report(path: Path, rows: list[dict[str, Any]], *, min_confiden
                 ("Document", "document"),
                 ("High-Confidence", "high_confidence_insert_decisions"),
                 ("Check Status", "adoption_check_status"),
+                ("Structural Issues", "adoption_structural_issues"),
                 ("Rejected By Check", "adoption_check_rejected"),
                 ("Actions", "decision_actions"),
             ],
@@ -968,8 +994,10 @@ def write_summary_report(path: Path, rows: list[dict[str, Any]], *, min_confiden
                 ("Document", "document"),
                 ("Candidates", "candidates"),
                 ("Decisions", "decisions"),
+                ("Orphans", "orphan_decisions"),
                 ("High-Conf", "high_confidence_insert_decisions"),
                 ("Ready", "adoption_ready"),
+                ("Structural Issues", "adoption_structural_issues"),
                 ("Main Nodes", "main_reasoning_nodes"),
                 ("Candidate Types", "candidate_types"),
                 ("Actions", "decision_actions"),
@@ -1588,6 +1616,20 @@ def adopt_decisions_for_document(
         return adoption_result
 
     write_reasoned_sidecars(out_dir, result)
+    if not result.get("applied"):
+        adoption_result = {
+            **public_result(result),
+            "target": target,
+            "adopted": [],
+            "structural_issues": [],
+            "rolled_back": False,
+            "quality": {},
+            "backups": [],
+            "status": "no_adoptable_decisions",
+        }
+        write_adoption_report(out_dir, adoption_result)
+        return adoption_result
+
     structural_issues = validate_reasoned_adoption(out_dir, result)
     adoption_result = {
         **public_result(result),
@@ -1735,7 +1777,7 @@ def adopt_mode(args: argparse.Namespace) -> int:
         adopted_count = len(result.get("adopted") or [])
         total_adopted += adopted_count
         processed += 1
-        if result.get("status") in {"rejected", "rolled_back"}:
+        if result.get("status") == "rolled_back":
             failed += 1
         print(f"[OK] {out_dir.name} | adopted {adopted_count} | status {result.get('status')}")
     print(f"Section reasoning adopt complete: {total_adopted} decision(s) adopted across {processed} document(s).")
