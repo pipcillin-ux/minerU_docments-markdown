@@ -419,6 +419,7 @@ DeepSeek、哪些文档已有高质量决策但还没采纳、哪些文档已经
 - 读取每本文档的候选、决策、旁路产物和采纳报告。
 - 输出全库级 CSV 和 Markdown 汇总，作为批量 review/adopt 的操作面板。
 - 统一流水线启用 `--section-reasoning collect|review|apply|adopt` 时，也会在对应阶段之后自动刷新全库 summary。
+- `review --limit` 默认增量推进：跳过已有决策的候选，合并写回新决策，避免重复复核同一批候选。
 
 ### 技术路径
 

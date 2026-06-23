@@ -378,6 +378,9 @@ output/section_reasoning_summary.md
 .venv/bin/mineru-section-reasoning --mode review --limit 20
 ```
 
+review 默认是增量模式：会跳过已经写入 `section_reasoning_decisions.jsonl`
+的候选，把新决策合并回原决策文件；只有传入 `--force` 时才会重新复核已缓存候选。
+
 collect/review 只写旁路审计文件：
 
 ```text

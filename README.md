@@ -432,6 +432,10 @@ Review those candidates with DeepSeek/OpenAI-compatible JSON responses:
 .venv/bin/mineru-section-reasoning --mode review --limit 20
 ```
 
+Review mode is incremental by default: it skips candidates already present in
+`section_reasoning_decisions.jsonl`, merges new decisions into the existing
+decision file, and only re-reviews cached candidates when `--force` is passed.
+
 Collect/review writes sidecar audit files only:
 
 ```text

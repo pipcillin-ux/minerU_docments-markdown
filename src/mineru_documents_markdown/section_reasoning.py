@@ -508,12 +508,25 @@ def collect_mode(args: argparse.Namespace) -> list[Path]:
     return written
 
 
-def load_all_candidates(root: Path, document_names: set[str] | None, limit: int | None = None) -> list[tuple[Path, dict[str, Any]]]:
+def reviewed_candidate_ids(out_dir: Path) -> set[str]:
+    return {str(decision.get("candidate_id") or "") for decision in load_jsonl(decision_path(out_dir))}
+
+
+def load_all_candidates(
+    root: Path,
+    document_names: set[str] | None,
+    limit: int | None = None,
+    *,
+    skip_reviewed: bool = False,
+) -> list[tuple[Path, dict[str, Any]]]:
     rows: list[tuple[Path, dict[str, Any]]] = []
     for out_dir in output_dirs(root):
         if document_names and out_dir.name not in document_names:
             continue
+        reviewed_ids = reviewed_candidate_ids(out_dir) if skip_reviewed else set()
         for candidate in load_jsonl(candidate_path(out_dir)):
+            if str(candidate.get("candidate_id") or "") in reviewed_ids:
+                continue
             rows.append((out_dir, candidate))
             if limit is not None and len(rows) >= limit:
                 return rows
@@ -625,14 +638,47 @@ def review_candidate(out_dir: Path, candidate: dict[str, Any], force: bool) -> d
         return uncertain_decision(candidate, input_hash, f"LLM review failed: {exc}")
 
 
+def merge_decisions(
+    existing: list[dict[str, Any]],
+    updates: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    by_id: dict[str, dict[str, Any]] = {}
+    for decision in existing:
+        candidate_id_value = str(decision.get("candidate_id") or "")
+        if candidate_id_value:
+            by_id[candidate_id_value] = decision
+    for decision in updates:
+        candidate_id_value = str(decision.get("candidate_id") or "")
+        if candidate_id_value:
+            by_id[candidate_id_value] = decision
+
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        candidate_id_value = str(candidate.get("candidate_id") or "")
+        if candidate_id_value in by_id:
+            merged.append(by_id[candidate_id_value])
+            seen.add(candidate_id_value)
+    for decision in [*existing, *updates]:
+        candidate_id_value = str(decision.get("candidate_id") or "")
+        if candidate_id_value and candidate_id_value not in seen:
+            merged.append(decision)
+            seen.add(candidate_id_value)
+    return merged
+
+
 def review_mode(args: argparse.Namespace) -> int:
     load_dotenv()
     root = Path(args.output_dir)
     document_names = set(args.document) if args.document else None
-    candidates = load_all_candidates(root, document_names, args.limit)
+    candidates = load_all_candidates(root, document_names, args.limit, skip_reviewed=not args.force)
     if not candidates:
         collect_mode(args)
-        candidates = load_all_candidates(root, document_names, args.limit)
+        candidates = load_all_candidates(root, document_names, args.limit, skip_reviewed=not args.force)
+    if not candidates:
+        print("No section reasoning candidates need review.")
+        return 0
     api_key, _, _ = api_config()
     if candidates and not api_key:
         print("DEEPSEEK_API_KEY or OPENAI_API_KEY is required for section reasoning review.")
@@ -644,9 +690,12 @@ def review_mode(args: argparse.Namespace) -> int:
         by_dir[out_dir].append(review_candidate(out_dir, candidate, args.force))
 
     for out_dir, decisions in by_dir.items():
-        write_jsonl(decision_path(out_dir), decisions)
-        write_report(out_dir, load_jsonl(candidate_path(out_dir)), decisions)
-        print(f"[OK] {out_dir.name} | section_reasoning_decisions {len(decisions)}")
+        existing = load_jsonl(decision_path(out_dir))
+        candidates_for_dir = load_jsonl(candidate_path(out_dir))
+        merged = merge_decisions(existing, decisions, candidates_for_dir)
+        write_jsonl(decision_path(out_dir), merged)
+        write_report(out_dir, candidates_for_dir, merged)
+        print(f"[OK] {out_dir.name} | new decisions {len(decisions)} | total decisions {len(merged)}")
     print(f"Section reasoning review complete: {sum(len(value) for value in by_dir.values())} decision(s).")
     return 0
 
