@@ -45,7 +45,6 @@ def parse_args() -> argparse.Namespace:
         help="Discard an existing pipeline workspace and initialize it again.",
     )
     parser.add_argument("--document", help="Only rebuild/review/check this existing output document name.")
-    parser.add_argument("--token", help="MinerU API token passed to mineru-batch-parse.")
     parser.add_argument("--chunk-size", type=int, default=60, help="PDF pages per MinerU chunk.")
     parser.add_argument("--max-upload-mb", type=int, help="Maximum MinerU upload chunk size in MB.")
     parser.add_argument("--api-base", help="MinerU API base URL.")
@@ -155,8 +154,6 @@ def parse_command(args: argparse.Namespace, output_dir: Path) -> list[str]:
     else:
         cmd.extend(["--docs-dir", args.docs_dir, "--out", str(output_dir)])
     cmd.extend(["--chunk-size", str(args.chunk_size)])
-    if args.token:
-        cmd.extend(["--token", args.token])
     if args.max_upload_mb is not None:
         cmd.extend(["--max-upload-mb", str(args.max_upload_mb)])
     if args.api_base:

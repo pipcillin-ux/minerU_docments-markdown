@@ -31,7 +31,8 @@ mineru-run-pipeline
 mineru_api_token=你的_TOKEN
 ```
 
-脚本也支持通过 `--token` 参数或 `MINERU_TOKEN` 环境变量传入 token。
+进程环境变量 `MINERU_TOKEN` 的优先级高于 `.env`。为避免 token 出现在
+进程列表中，命令行不再接受 token 参数。
 
 ## 输入目录
 
@@ -175,6 +176,8 @@ output/heading_warn_deepseek_review.md
 不传 `--pdf` 时，`--out` 是总输出目录。
 
 传入 `--pdf` 时，`--out` 是该单个 PDF 的输出目录。
+输出目录和 Markdown 文件名会完整保留 PDF stem；批量模式会在写入前检查
+大小写不敏感的重名，发现冲突立即停止。
 
 ## 断点续跑和失败重试
 

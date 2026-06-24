@@ -9,20 +9,24 @@ page limit can be processed safely and resumed after interruption.
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import http.client
 import os
+import stat
 import re
 import shutil
 import sys
+import tempfile
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
+from pathlib import Path, PurePosixPath
+from typing import Any, Callable
 
 
 API_BASE = "https://mineru.net/api/v4"
@@ -32,6 +36,7 @@ DEFAULT_MAX_UPLOAD_MB = 200
 DEFAULT_SUBMIT_FILES_PER_MINUTE = 50
 DEFAULT_RESULT_REQUESTS_PER_MINUTE = 1000
 DEFAULT_DAILY_UPLOAD_FILE_LIMIT = 5000
+UPLOAD_BUFFER_SIZE = 1024 * 1024
 DONE_STATES = {"done"}
 RUNNING_STATES = {"pending", "running", "converting", "uploading", "waiting-file"}
 FAILED_STATES = {"failed"}
@@ -42,14 +47,23 @@ class MinerUError(RuntimeError):
 
 
 class RateLimiter:
-    """Simple fixed-window limiter for MinerU API quotas."""
+    """Sliding-window limiter for MinerU API quotas."""
 
-    def __init__(self, max_units: int, window_seconds: float, label: str) -> None:
+    def __init__(
+        self,
+        max_units: int,
+        window_seconds: float,
+        label: str,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        sleeper: Callable[[float], None] = time.sleep,
+    ) -> None:
         self.max_units = max_units
         self.window_seconds = window_seconds
         self.label = label
-        self.used_units = 0
-        self.window_started = time.monotonic()
+        self.clock = clock
+        self.sleeper = sleeper
+        self.timestamps: collections.deque[float] = collections.deque()
 
     def consume(self, units: int = 1) -> None:
         if units <= 0:
@@ -61,24 +75,22 @@ class RateLimiter:
             )
 
         while True:
-            now = time.monotonic()
-            elapsed = now - self.window_started
-            if elapsed >= self.window_seconds:
-                self.window_started = now
-                self.used_units = 0
-                elapsed = 0
+            now = self.clock()
+            cutoff = now - self.window_seconds
+            while self.timestamps and self.timestamps[0] <= cutoff:
+                self.timestamps.popleft()
 
-            if self.used_units + units <= self.max_units:
-                self.used_units += units
+            if len(self.timestamps) + units <= self.max_units:
+                self.timestamps.extend([now] * units)
                 return
 
-            sleep_seconds = max(0.1, self.window_seconds - elapsed)
+            sleep_seconds = max(0.001, self.timestamps[0] + self.window_seconds - now)
             print(
                 f"MinerU {self.label} rate limit reached; "
                 f"sleeping {sleep_seconds:.1f}s...",
                 flush=True,
             )
-            time.sleep(sleep_seconds)
+            self.sleeper(sleep_seconds)
 
 
 @dataclass
@@ -153,11 +165,6 @@ def parse_args() -> argparse.Namespace:
         help="Optional public PDF URL. If omitted, the local PDF is uploaded through MinerU signed URLs.",
     )
     parser.add_argument("--out", default="output", help="Output base directory.")
-    parser.add_argument(
-        "--token",
-        default=os.environ.get("MINERU_TOKEN"),
-        help="MinerU API token. Defaults to MINERU_TOKEN or .env mineru_api_token.",
-    )
     parser.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE)
     parser.add_argument("--api-base", default=API_BASE)
     parser.add_argument("--model-version", default=DEFAULT_MODEL_VERSION)
@@ -291,11 +298,7 @@ def make_data_id(pdf_path: Path, task: BatchTask) -> str:
 
 
 def clean_document_stem(pdf_path: Path) -> str:
-    stem = pdf_path.stem
-    stem = re.sub(r"^\d+[_\s-]+", "", stem)
-    stem = re.sub(r"[_\s-]*\d+(?:\(\d+\))?$", "", stem)
-    stem = re.sub(r"\s+", " ", stem).strip(" _-")
-    return stem or pdf_path.stem
+    return pdf_path.stem
 
 
 def output_markdown_name(pdf_path: Path) -> str:
@@ -317,6 +320,18 @@ def find_input_pdfs(args: argparse.Namespace) -> list[Path]:
     if not pdfs:
         raise SystemExit(f"No PDF files found in: {docs_dir}")
     return pdfs
+
+
+def validate_output_name_collisions(pdfs: list[Path]) -> None:
+    by_name: dict[str, list[Path]] = {}
+    for pdf_path in pdfs:
+        normalized = unicodedata.normalize("NFC", clean_document_stem(pdf_path)).casefold()
+        by_name.setdefault(normalized, []).append(pdf_path)
+    collisions = [paths for paths in by_name.values() if len(paths) > 1]
+    if not collisions:
+        return
+    details = "; ".join(", ".join(str(path) for path in paths) for paths in collisions)
+    raise MinerUError(f"PDF output-name collision detected before parsing: {details}")
 
 
 def chunk_pdf_path(out_dir: Path, task: BatchTask) -> Path:
@@ -478,23 +493,36 @@ def request_upload_batch(args: argparse.Namespace, pdf_path: Path, tasks: list[B
 
 
 def upload_pdf_to_signed_url(pdf_path: Path, upload_url: str, max_retries: int) -> None:
-    data = pdf_path.read_bytes()
     parsed = urllib.parse.urlparse(upload_url)
     path = parsed.path or "/"
     if parsed.query:
         path = f"{path}?{parsed.query}"
+    content_length = pdf_path.stat().st_size
 
     for attempt in range(1, max_retries + 1):
         connection_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
         connection = connection_cls(parsed.netloc, timeout=300)
         try:
-            connection.request("PUT", path, body=data, headers={})
+            connection.putrequest("PUT", path)
+            connection.putheader("Content-Length", str(content_length))
+            connection.endheaders()
+            with pdf_path.open("rb") as stream:
+                while chunk := stream.read(UPLOAD_BUFFER_SIZE):
+                    connection.send(chunk)
             response = connection.getresponse()
             detail = response.read().decode("utf-8", errors="replace")
             if 200 <= response.status < 300:
                 return
+            if (response.status == 429 or response.status >= 500) and attempt < max_retries:
+                retry_after = response.getheader("Retry-After")
+                try:
+                    delay = max(0.0, float(retry_after)) if retry_after else min(2**attempt, 30)
+                except ValueError:
+                    delay = min(2**attempt, 30)
+                time.sleep(delay)
+                continue
             raise MinerUError(f"Upload failed with HTTP {response.status}: {detail}")
-        except OSError as exc:
+        except (OSError, http.client.HTTPException) as exc:
             if attempt >= max_retries:
                 raise MinerUError(f"Upload failed for signed URL: {exc}") from exc
             time.sleep(min(2 ** attempt, 30))
@@ -758,9 +786,7 @@ def download_and_extract(args: argparse.Namespace, tasks: list[BatchTask], out_d
         if not zip_path.exists():
             download_file(task.full_zip_url, zip_path, max_retries=args.max_retries)
         if not extracted_dir.exists():
-            extracted_dir.mkdir(parents=True, exist_ok=True)
-            with zipfile.ZipFile(zip_path) as archive:
-                archive.extractall(extracted_dir)
+            safe_extract_zip(zip_path, extracted_dir)
         md_path = locate_markdown(extracted_dir)
         task.zip_path = str(zip_path.relative_to(out_dir))
         task.md_path = str(md_path.relative_to(out_dir))
@@ -787,6 +813,45 @@ def merge_markdown(tasks: list[BatchTask], out_dir: Path, output_name: str) -> N
         failed_path.write_text(json.dumps(failed, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     elif failed_path.exists():
         failed_path.unlink()
+
+
+def safe_extract_zip(zip_path: Path, extracted_dir: Path) -> None:
+    extracted_dir.parent.mkdir(parents=True, exist_ok=True)
+    temporary_dir = Path(tempfile.mkdtemp(prefix=f".{extracted_dir.name}.tmp-", dir=extracted_dir.parent))
+    try:
+        with zipfile.ZipFile(zip_path) as archive:
+            members = archive.infolist()
+            destinations: list[tuple[zipfile.ZipInfo, Path]] = []
+            for member in members:
+                name = member.filename
+                if "\x00" in name or "\\" in name:
+                    raise MinerUError(f"Unsafe ZIP member path: {name!r}")
+                pure_path = PurePosixPath(name)
+                if not name or pure_path == PurePosixPath("."):
+                    raise MinerUError(f"Unsafe ZIP member path: {name!r}")
+                if pure_path.is_absolute() or ".." in pure_path.parts:
+                    raise MinerUError(f"Unsafe ZIP member path: {name!r}")
+                if re.match(r"^[A-Za-z]:", name):
+                    raise MinerUError(f"Unsafe ZIP member path: {name!r}")
+                mode = member.external_attr >> 16
+                if mode and stat.S_ISLNK(mode):
+                    raise MinerUError(f"ZIP symbolic links are not allowed: {name!r}")
+                destination = (temporary_dir / Path(*pure_path.parts)).resolve()
+                if not destination.is_relative_to(temporary_dir.resolve()):
+                    raise MinerUError(f"Unsafe ZIP member path: {name!r}")
+                destinations.append((member, destination))
+
+            for member, destination in destinations:
+                if member.is_dir():
+                    destination.mkdir(parents=True, exist_ok=True)
+                    continue
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as source, destination.open("wb") as target:
+                    shutil.copyfileobj(source, target)
+        os.replace(temporary_dir, extracted_dir)
+    except BaseException:
+        shutil.rmtree(temporary_dir, ignore_errors=True)
+        raise
 
 
 def validate_args(args: argparse.Namespace) -> int:
@@ -867,6 +932,11 @@ def main() -> int:
         return validation_status
 
     pdfs = find_input_pdfs(args)
+    try:
+        validate_output_name_collisions(pdfs)
+    except MinerUError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     if args.url and len(pdfs) != 1:
         print("--url can only be used with a single --pdf input.", file=sys.stderr)
         return 2
@@ -876,10 +946,9 @@ def main() -> int:
             process_pdf(args, pdf_path, output_document_dir(Path(args.out), pdf_path))
         return 0
 
+    args.token = os.environ.get("MINERU_TOKEN") or load_token_from_dotenv(Path(".env"))
     if not args.token:
-        args.token = load_token_from_dotenv(Path(".env"))
-    if not args.token:
-        print("MINERU_TOKEN is required, or pass --token.", file=sys.stderr)
+        print("MINERU_TOKEN is required in the environment or .env.", file=sys.stderr)
         return 2
 
     args.submit_rate_limiter = RateLimiter(

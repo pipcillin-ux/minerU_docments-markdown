@@ -8,6 +8,8 @@ import os
 import time
 import urllib.error
 import urllib.request
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +40,23 @@ def cache_key(payload: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def retry_after_seconds(value: str | None, *, now: datetime | None = None) -> float | None:
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        retry_at = parsedate_to_datetime(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=UTC)
+    current = now or datetime.now(UTC)
+    return max(0.0, (retry_at - current).total_seconds())
+
+
 def call_chat_completions(
     payload: dict[str, Any],
     timeout: int = 90,
@@ -57,21 +76,27 @@ def call_chat_completions(
         "response_format": {"type": "json_object"},
     }
     data = json.dumps(body, ensure_ascii=False).encode("utf-8")
-    request = urllib.request.Request(
-        f"{base_url}/chat/completions",
-        data=data,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
     for attempt in range(retries + 1):
+        request = urllib.request.Request(
+            f"{base_url}/chat/completions",
+            data=data,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 response_data = json.loads(response.read().decode("utf-8"))
             content = response_data["choices"][0]["message"]["content"]
             return json.loads(content)
+        except urllib.error.HTTPError as exc:
+            retryable = exc.code == 429 or exc.code == 503 or 500 <= exc.code < 600
+            if not retryable or attempt >= retries:
+                raise RuntimeError(f"LLM heading assist failed: HTTP {exc.code}") from exc
+            delay = retry_after_seconds(exc.headers.get("Retry-After"))
+            time.sleep(delay if delay is not None else min(2**attempt, 8))
         except (urllib.error.URLError, KeyError, json.JSONDecodeError) as exc:
             if attempt >= retries:
                 raise RuntimeError(f"LLM heading assist failed: {exc}") from exc

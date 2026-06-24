@@ -36,7 +36,9 @@ Put your MinerU token in `.env`:
 mineru_api_token=YOUR_TOKEN
 ```
 
-The script also accepts `--token` or `MINERU_TOKEN`.
+`MINERU_TOKEN` in the process environment takes precedence over `.env`.
+Tokens are intentionally not accepted as CLI arguments so they cannot leak
+through process listings.
 
 ## Input
 
@@ -193,6 +195,9 @@ Process one PDF:
 
 When `--pdf` is omitted, `--out` is treated as the output root directory.
 When `--pdf` is provided, `--out` is the output directory for that one PDF.
+PDF stems are preserved exactly as output directory/file names. Batch mode
+stops before writing anything when two input names would collide
+case-insensitively.
 
 ## Resume Or Retry
 

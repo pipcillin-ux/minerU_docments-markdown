@@ -414,6 +414,22 @@ def apply_decision(
     return block_type, heading_level, content, "", decision.decision_source, decision.confidence, decision.reason
 
 
+def update_heading_stack(stack: list[str], level: int, heading_text: str) -> list[str]:
+    if not 1 <= level <= 6:
+        raise ValueError(f"Heading level must be between 1 and 6, got {level}.")
+    updated = list(stack[:6])
+    if len(updated) < 6:
+        updated.extend([""] * (6 - len(updated)))
+    updated[level - 1] = heading_text
+    for index in range(level, 6):
+        updated[index] = ""
+    return updated
+
+
+def heading_stack_path(stack: list[str]) -> list[str]:
+    return [value for value in stack if value]
+
+
 def heading_diagnostics(blocks: list[dict[str, Any]], decisions: list[HeadingDecision]) -> dict[str, Any]:
     heading_levels: dict[str, int] = {}
     long_heading_samples: list[dict[str, Any]] = []
@@ -666,10 +682,7 @@ def build_for_output_dir(
     structured_path = out_dir / "structured_blocks.jsonl"
     semantic_path = out_dir / semantic_markdown_name(out_dir)
 
-    current_h1 = ""
-    current_h2 = ""
-    current_h3 = ""
-    current_h4 = ""
+    heading_stack = [""] * 6
     semantic_lines: list[str] = []
     structured_blocks: list[dict[str, Any]] = []
     block_count = 0
@@ -729,21 +742,8 @@ def build_for_output_dir(
             if split_front_heading:
                 for split_index, (split_content, split_level) in enumerate(split_front_heading, start=1):
                     heading_text = normalize_heading_text(split_content)
-                    if split_level == 1:
-                        current_h1 = heading_text
-                        current_h2 = ""
-                        current_h3 = ""
-                        current_h4 = ""
-                    elif split_level == 2:
-                        current_h2 = heading_text
-                        current_h3 = ""
-                        current_h4 = ""
-                    elif split_level == 3:
-                        current_h3 = heading_text
-                        current_h4 = ""
-                    elif split_level == 4:
-                        current_h4 = heading_text
-                    section_path = [value for value in (current_h1, current_h2, current_h3, current_h4) if value]
+                    heading_stack = update_heading_stack(heading_stack, split_level, heading_text)
+                    section_path = heading_stack_path(heading_stack)
                     split_block = {
                         "document": out_dir.name,
                         "block_id": f"{current_block_id}:split{split_index}",
@@ -782,22 +782,9 @@ def build_for_output_dir(
 
             if block_type == "heading" and heading_level:
                 heading_text = normalize_heading_text(content_clean)
-                if heading_level == 1:
-                    current_h1 = heading_text
-                    current_h2 = ""
-                    current_h3 = ""
-                    current_h4 = ""
-                elif heading_level == 2:
-                    current_h2 = heading_text
-                    current_h3 = ""
-                    current_h4 = ""
-                elif heading_level == 3:
-                    current_h3 = heading_text
-                    current_h4 = ""
-                elif heading_level == 4:
-                    current_h4 = heading_text
+                heading_stack = update_heading_stack(heading_stack, heading_level, heading_text)
 
-            section_path = [value for value in (current_h1, current_h2, current_h3, current_h4) if value]
+            section_path = heading_stack_path(heading_stack)
             image_table_candidate = False
             if block_type == "image":
                 probe = " ".join(str(value) for value in (content_clean, extra.get("image_caption", "")))

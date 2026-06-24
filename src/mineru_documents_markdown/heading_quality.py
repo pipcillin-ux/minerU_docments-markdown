@@ -212,6 +212,19 @@ def check_structured_blocks(blocks: list[dict[str, Any]], toc_payload: dict[str,
         page = block.get("page")
         region = str(block.get("region") or "")
         block_id = str(block.get("block_id") or "")
+        if not isinstance(level, int) or not 1 <= level <= 6:
+            issues.append(
+                HeadingIssue(
+                    code="semantic_heading_invalid_level",
+                    severity="FAIL",
+                    message="Semantic heading has no valid Markdown level.",
+                    page=page,
+                    text=text[:180],
+                    block_id=block_id,
+                    suggestion="Rebuild heading decisions with a level between 1 and 6.",
+                )
+            )
+            continue
         if region == "toc":
             issues.append(
                 HeadingIssue(
