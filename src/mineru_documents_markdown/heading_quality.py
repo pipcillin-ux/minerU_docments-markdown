@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .domain_profiles import DomainProfile, load_domain_profile, strict_subsection_like
+from .io_utils import load_json, load_jsonl
 from .structure_utils import heading_key, looks_like_toc_entry, normalize_text, output_dirs
 from .toc_parser import split_stuck_toc_line
 
@@ -46,6 +48,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="output", help="Root output directory.")
     parser.add_argument("--document", help="Only check one output directory by name.")
     parser.add_argument(
+        "--domain-profile",
+        default="generic",
+        help="Domain profile name (generic/tcm) or a TOML profile path.",
+    )
+    parser.add_argument(
         "--fail-on",
         choices=("none", "warn", "fail"),
         default="none",
@@ -54,34 +61,14 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_json(path: Path, default: Any) -> Any:
-    if not path.exists():
-        return default
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return default
-
-
-def load_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            rows.append(json.loads(line))
-        except json.JSONDecodeError:
-            rows.append({"_invalid_json": line[:200]})
-    return rows
-
-
-def looks_like_stuck_toc(text: str) -> bool:
+def looks_like_stuck_toc(text: str, domain_profile: DomainProfile | None = None) -> bool:
     clean = normalize_text(text)
     if not clean:
         return False
-    return bool(re.search(r"\d", clean) and len(split_stuck_toc_line(clean)) > 1)
+    return bool(
+        re.search(r"\d", clean)
+        and len(split_stuck_toc_line(clean, domain_profile)) > 1
+    )
 
 
 def is_sentence_heading(text: str) -> bool:
@@ -118,15 +105,6 @@ def is_question_like_heading(text: str) -> bool:
     return bool(re.search(r"[?？]\s*$", clean))
 
 
-def is_strict_clinical_subsection(text: str) -> bool:
-    clean = normalize_text(text)
-    compact = re.sub(r"\s+", "", clean)
-    clinical_terms = r"(症状|体征|常见并发症|症状与体征|临床症状|主要症状)"
-    if re.fullmatch(clinical_terms, compact):
-        return True
-    return bool(re.fullmatch(r"[（(]?[一二三四五六七八九十百\d]+[）)]" + clinical_terms, compact))
-
-
 def is_fragment_heading(block: dict[str, Any], text: str) -> bool:
     if block.get("toc_heading_level"):
         return False
@@ -148,7 +126,11 @@ def issue_counts(issues: list[HeadingIssue]) -> dict[str, int]:
     return {"FAIL": counts.get("FAIL", 0), "WARN": counts.get("WARN", 0), "INFO": counts.get("INFO", 0)}
 
 
-def check_toc_tree(out_dir: Path, toc_payload: dict[str, Any]) -> list[HeadingIssue]:
+def check_toc_tree(
+    out_dir: Path,
+    toc_payload: dict[str, Any],
+    domain_profile: DomainProfile | None = None,
+) -> list[HeadingIssue]:
     issues: list[HeadingIssue] = []
     nodes = toc_payload.get("nodes") or []
     if not nodes:
@@ -163,9 +145,12 @@ def check_toc_tree(out_dir: Path, toc_payload: dict[str, Any]) -> list[HeadingIs
     for node in nodes:
         source_text = str(node.get("source_text") or "")
         title = str(node.get("title") or "")
-        if looks_like_stuck_toc(source_text) and not looks_like_stuck_toc(title):
+        if looks_like_stuck_toc(source_text, domain_profile) and not looks_like_stuck_toc(
+            title,
+            domain_profile,
+        ):
             continue
-        if looks_like_stuck_toc(title):
+        if looks_like_stuck_toc(title, domain_profile):
             issues.append(
                 HeadingIssue(
                     code="toc_stuck_item",
@@ -190,7 +175,11 @@ def check_toc_tree(out_dir: Path, toc_payload: dict[str, Any]) -> list[HeadingIs
     return issues
 
 
-def check_structured_blocks(blocks: list[dict[str, Any]], toc_payload: dict[str, Any]) -> list[HeadingIssue]:
+def check_structured_blocks(
+    blocks: list[dict[str, Any]],
+    toc_payload: dict[str, Any],
+    domain_profile: DomainProfile | None = None,
+) -> list[HeadingIssue]:
     issues: list[HeadingIssue] = []
     headings = [block for block in blocks if block.get("block_type") == "heading"]
     if not headings:
@@ -249,7 +238,7 @@ def check_structured_blocks(blocks: list[dict[str, Any]], toc_payload: dict[str,
                     suggestion="Keep page-numbered TOC entries outside the body heading outline.",
                 )
             )
-        if looks_like_stuck_toc(text):
+        if looks_like_stuck_toc(text, domain_profile):
             issues.append(
                 HeadingIssue(
                     code="semantic_stuck_heading",
@@ -273,7 +262,7 @@ def check_structured_blocks(blocks: list[dict[str, Any]], toc_payload: dict[str,
                     suggestion="Use TOC/context to demote this heading to H3/H4.",
                 )
             )
-        if level == 1 and is_strict_clinical_subsection(text):
+        if level == 1 and domain_profile and strict_subsection_like(text, domain_profile):
             issues.append(
                 HeadingIssue(
                     code="clinical_subsection_as_h1",
@@ -756,7 +745,10 @@ def check_sibling_consistency(blocks: list[dict[str, Any]]) -> list[HeadingIssue
     return issues
 
 
-def quality_for_output_dir(out_dir: Path) -> tuple[dict[str, Any], list[HeadingIssue]]:
+def quality_for_output_dir(
+    out_dir: Path,
+    domain_profile: DomainProfile | None = None,
+) -> tuple[dict[str, Any], list[HeadingIssue]]:
     toc_payload = load_json(out_dir / "toc_tree.json", {"nodes": []})
     section_tree_path = out_dir / "section_tree.json"
     section_payload = load_json(
@@ -766,8 +758,8 @@ def quality_for_output_dir(out_dir: Path) -> tuple[dict[str, Any], list[HeadingI
     blocks = load_jsonl(out_dir / "structured_blocks.jsonl")
     decisions = load_jsonl(out_dir / "heading_decisions.jsonl")
     issues: list[HeadingIssue] = []
-    issues.extend(check_toc_tree(out_dir, toc_payload))
-    issues.extend(check_structured_blocks(blocks, toc_payload))
+    issues.extend(check_toc_tree(out_dir, toc_payload, domain_profile))
+    issues.extend(check_structured_blocks(blocks, toc_payload, domain_profile))
     issues.extend(check_decisions(decisions))
     issues.extend(check_section_tree(section_payload, blocks))
     issues.extend(check_sibling_consistency(blocks))
@@ -820,6 +812,7 @@ def write_markdown_report(out_dir: Path, summary: dict[str, Any], issues: list[H
 
 def main() -> int:
     args = parse_args()
+    domain_profile = load_domain_profile(args.domain_profile)
     output_root = Path(args.output_dir)
     dirs = output_dirs(output_root)
     if args.document:
@@ -832,7 +825,7 @@ def main() -> int:
     fail_documents = 0
     warn_documents = 0
     for out_dir in dirs:
-        summary, issues = quality_for_output_dir(out_dir)
+        summary, issues = quality_for_output_dir(out_dir, domain_profile)
         out_dir.joinpath("heading_quality.json").write_text(
             json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",

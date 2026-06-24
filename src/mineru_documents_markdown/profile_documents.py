@@ -13,6 +13,7 @@ from typing import Any
 
 from pypdf import PdfReader
 
+from .domain_profiles import DomainProfile, load_domain_profile
 from .structure_utils import (
     classify_page_regions,
     compact_heading_text,
@@ -33,6 +34,11 @@ from .structure_utils import (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Profile MinerU output directories.")
     parser.add_argument("--output-dir", default="output", help="Root output directory.")
+    parser.add_argument(
+        "--domain-profile",
+        default="generic",
+        help="Domain profile name (generic/tcm) or a TOML profile path.",
+    )
     return parser.parse_args()
 
 
@@ -77,7 +83,10 @@ def semantic_heading_diagnostics(out_dir: Path) -> dict[str, Any]:
         return {"heading_diagnostics_error": "invalid heading_diagnostics.json"}
 
 
-def profile_output_dir(out_dir: Path) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+def profile_output_dir(
+    out_dir: Path,
+    domain_profile: DomainProfile | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
     tasks = load_tasks(out_dir)
     item_counts: Counter[str] = Counter()
     page_counts: Counter[int] = Counter()
@@ -116,7 +125,8 @@ def profile_output_dir(out_dir: Path) -> tuple[dict[str, Any], dict[str, Any], l
             if caption:
                 image_captions.append(caption)
             text = normalize_text(item_text(item) + " " + caption)
-            if any(keyword in text for keyword in ("表", "项目", "剂量", "分型", "诊断", "评分")):
+            keywords = domain_profile.image_table_keywords if domain_profile else ()
+            if any(keyword in text for keyword in keywords):
                 image_table_candidates.append(
                     {
                         "page": absolute_page,
@@ -245,6 +255,7 @@ def write_quality_report(out_dir: Path, profile: dict[str, Any], diagnostics: di
 
 def main() -> int:
     args = parse_args()
+    domain_profile = load_domain_profile(args.domain_profile)
     output_root = Path(args.output_dir)
     dirs = output_dirs(output_root)
     if not dirs:
@@ -254,7 +265,7 @@ def main() -> int:
     rows: list[dict[str, Any]] = []
     total_issues = 0
     for out_dir in dirs:
-        profile, diagnostics, issues = profile_output_dir(out_dir)
+        profile, diagnostics, issues = profile_output_dir(out_dir, domain_profile)
         out_dir.joinpath("document_profile.json").write_text(
             json.dumps(profile, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",

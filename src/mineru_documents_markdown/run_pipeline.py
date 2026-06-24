@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 from typing import Sequence
 
+from .defaults import HEADING_CANDIDATE_MIN_SCORE, LLM_REVIEW_CONFIDENCE_THRESHOLD
 from .mineru_batch_parse import output_document_dir
 from .pipeline_workspace import (
     WorkspaceError,
@@ -35,6 +36,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pdf", help="Process one PDF. Output is placed under --output-dir/<document-name>.")
     parser.add_argument("--docs-dir", default="docs", help="PDF directory used when --pdf is omitted.")
     parser.add_argument("--output-dir", default="output", help="Root output directory.")
+    parser.add_argument(
+        "--domain-profile",
+        default="generic",
+        help="Domain profile name (generic/tcm) or a TOML profile path.",
+    )
     parser.add_argument(
         "--work-dir",
         help="Isolated pipeline workspace. Defaults to .<output-name>.pipeline-work beside --output-dir.",
@@ -65,8 +71,16 @@ def parse_args() -> argparse.Namespace:
         default="rule",
         help="Initial heading decision strategy.",
     )
-    parser.add_argument("--llm-confidence-threshold", type=float, default=0.72)
-    parser.add_argument("--candidate-min-score", type=float, default=0.18)
+    parser.add_argument(
+        "--llm-confidence-threshold",
+        type=float,
+        default=LLM_REVIEW_CONFIDENCE_THRESHOLD,
+    )
+    parser.add_argument(
+        "--candidate-min-score",
+        type=float,
+        default=HEADING_CANDIDATE_MIN_SCORE,
+    )
     parser.add_argument("--llm-batch-size", type=int, default=20)
     parser.add_argument(
         "--repair-warn-with",
@@ -178,6 +192,8 @@ def build_command(
         "mineru_documents_markdown.build_structured_blocks",
         "--output-dir",
         str(output_dir),
+        "--domain-profile",
+        args.domain_profile,
         "--semantic-scope",
         args.semantic_scope,
         "--heading-strategy",
@@ -209,6 +225,8 @@ def heading_quality_command(
         str(output_dir),
         "--fail-on",
         fail_on,
+        "--domain-profile",
+        args.domain_profile,
     )
     if document:
         cmd.extend(["--document", document])
@@ -253,6 +271,8 @@ def section_reasoning_command(
         str(output_dir),
         "--mode",
         mode,
+        "--domain-profile",
+        args.domain_profile,
     )
     if document:
         cmd.extend(["--document", document])
@@ -341,6 +361,8 @@ def review_output_path(args: argparse.Namespace, output_dir: Path, work_dir: Pat
 
 def main() -> int:
     args = parse_args()
+    if not hasattr(args, "domain_profile"):
+        args.domain_profile = "generic"
     document = document_name_from_args(args)
     output_dir = resolved(Path(args.output_dir))
     work_dir = resolved(Path(args.work_dir)) if args.work_dir else default_work_dir(output_dir)
@@ -368,7 +390,13 @@ def main() -> int:
         )
         run_stage(
             "Profile documents",
-            module_cmd("mineru_documents_markdown.profile_documents", "--output-dir", str(work_dir)),
+            module_cmd(
+                "mineru_documents_markdown.profile_documents",
+                "--output-dir",
+                str(work_dir),
+                "--domain-profile",
+                args.domain_profile,
+            ),
         )
         run_stage(
             "Build semantic Markdown",
@@ -408,7 +436,13 @@ def main() -> int:
                     )
                 run_stage(
                     "Refresh document profiles",
-                    module_cmd("mineru_documents_markdown.profile_documents", "--output-dir", str(work_dir)),
+                    module_cmd(
+                        "mineru_documents_markdown.profile_documents",
+                        "--output-dir",
+                        str(work_dir),
+                        "--domain-profile",
+                        args.domain_profile,
+                    ),
                 )
             else:
                 print("==> No WARN reviews found; repair rebuild skipped.")

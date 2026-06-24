@@ -8,13 +8,14 @@ import os
 import time
 import urllib.error
 import urllib.request
-from datetime import UTC, datetime
-from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
+from .defaults import LLM_REVIEW_CONFIDENCE_THRESHOLD
+from .domain_profiles import DomainProfile
 from .heading_candidates import HeadingCandidate
 from .heading_decisions import HeadingDecision, rule_decision_for_candidate
+from .http_utils import retry_after_seconds, retry_delay
 
 
 SYSTEM_PROMPT = """You repair PDF heading structure. Return strict JSON only.
@@ -38,23 +39,6 @@ def api_config() -> tuple[str, str, str]:
 def cache_key(payload: dict[str, Any]) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
-
-
-def retry_after_seconds(value: str | None, *, now: datetime | None = None) -> float | None:
-    if not value:
-        return None
-    try:
-        return max(0.0, float(value))
-    except ValueError:
-        pass
-    try:
-        retry_at = parsedate_to_datetime(value)
-    except (TypeError, ValueError, OverflowError):
-        return None
-    if retry_at.tzinfo is None:
-        retry_at = retry_at.replace(tzinfo=UTC)
-    current = now or datetime.now(UTC)
-    return max(0.0, (retry_at - current).total_seconds())
 
 
 def call_chat_completions(
@@ -95,8 +79,7 @@ def call_chat_completions(
             retryable = exc.code == 429 or exc.code == 503 or 500 <= exc.code < 600
             if not retryable or attempt >= retries:
                 raise RuntimeError(f"LLM heading assist failed: HTTP {exc.code}") from exc
-            delay = retry_after_seconds(exc.headers.get("Retry-After"))
-            time.sleep(delay if delay is not None else min(2**attempt, 8))
+            time.sleep(retry_delay(attempt, exc.headers.get("Retry-After"), cap=8))
         except (urllib.error.URLError, KeyError, json.JSONDecodeError) as exc:
             if attempt >= retries:
                 raise RuntimeError(f"LLM heading assist failed: {exc}") from exc
@@ -257,8 +240,9 @@ def maybe_assist_decisions(
     toc_context: list[dict[str, Any]],
     strategy: str,
     cache_dir: Path,
-    threshold: float = 0.72,
+    threshold: float = LLM_REVIEW_CONFIDENCE_THRESHOLD,
     batch_size: int = 20,
+    domain_profile: DomainProfile | None = None,
 ) -> list[HeadingDecision]:
     if strategy == "rule":
         return rule_decisions
@@ -282,7 +266,7 @@ def maybe_assist_decisions(
             )
         except RuntimeError:
             assisted.extend(
-                rule_decision_for_candidate(candidate, toc_levels, toc_paths)
+                rule_decision_for_candidate(candidate, toc_levels, toc_paths, domain_profile)
                 for candidate in pending_candidates
             )
         pending_candidates.clear()

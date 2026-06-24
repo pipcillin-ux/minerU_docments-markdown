@@ -8,6 +8,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .defaults import (
+    HEADING_PROMOTION_MIN_SCORE,
+    KNOWN_SECTION_CONFIDENCE,
+    LLM_REVIEW_CONFIDENCE_THRESHOLD,
+    MAJOR_HEADING_CONFIDENCE,
+    TOC_MATCH_CONFIDENCE,
+)
+from .domain_profiles import DomainProfile
 from .heading_candidates import SENTENCE_PUNCTUATION, HeadingCandidate
 from .structure_utils import (
     heading_level_from_text,
@@ -130,6 +138,7 @@ def rule_decision_for_candidate(
     candidate: HeadingCandidate,
     toc_levels: dict[str, int],
     toc_paths: dict[str, list[str]],
+    domain_profile: DomainProfile | None = None,
 ) -> HeadingDecision:
     text = normalize_text(candidate.text)
     key = heading_key(text)
@@ -179,12 +188,12 @@ def rule_decision_for_candidate(
             remaining_text="",
             level=toc_levels[key],
             parent_path=path[:-1],
-            confidence=0.92,
+            confidence=TOC_MATCH_CONFIDENCE,
             decision_source="rule",
             reason="The candidate matches a TOC node.",
         )
 
-    if is_probable_body_section(text):
+    if is_probable_body_section(text, domain_profile):
         return HeadingDecision(
             candidate_id=candidate.candidate_id,
             block_id=candidate.block_id,
@@ -194,7 +203,7 @@ def rule_decision_for_candidate(
             remaining_text="",
             level=2,
             parent_path=[],
-            confidence=0.82,
+            confidence=KNOWN_SECTION_CONFIDENCE,
             decision_source="rule",
             reason="The candidate matches a known section heading pattern.",
         )
@@ -209,7 +218,7 @@ def rule_decision_for_candidate(
             remaining_text=text,
             level=None,
             parent_path=[],
-            confidence=0.72,
+            confidence=LLM_REVIEW_CONFIDENCE_THRESHOLD,
             decision_source="rule",
             reason="The candidate looks like a short OCR/layout heading fragment.",
         )
@@ -291,7 +300,7 @@ def rule_decision_for_candidate(
             reason="The candidate is a short numbered heading-like block.",
         )
 
-    if is_probable_major_heading(text):
+    if is_probable_major_heading(text, domain_profile):
         return HeadingDecision(
             candidate_id=candidate.candidate_id,
             block_id=candidate.block_id,
@@ -301,7 +310,7 @@ def rule_decision_for_candidate(
             remaining_text="",
             level=1,
             parent_path=[],
-            confidence=0.68,
+            confidence=MAJOR_HEADING_CONFIDENCE,
             decision_source="rule",
             reason="The candidate looks like a major heading.",
         )
@@ -321,7 +330,11 @@ def rule_decision_for_candidate(
             reason="The candidate contains sentence punctuation or is too long for a reliable heading.",
         )
 
-    action = "promote_to_heading" if candidate.candidate_score >= 0.42 else "demote_to_paragraph"
+    action = (
+        "promote_to_heading"
+        if candidate.candidate_score >= HEADING_PROMOTION_MIN_SCORE
+        else "demote_to_paragraph"
+    )
     is_heading = action == "promote_to_heading"
     return HeadingDecision(
         candidate_id=candidate.candidate_id,
@@ -342,8 +355,12 @@ def build_rule_decisions(
     candidates: list[HeadingCandidate],
     toc_levels: dict[str, int],
     toc_paths: dict[str, list[str]],
+    domain_profile: DomainProfile | None = None,
 ) -> list[HeadingDecision]:
-    return [rule_decision_for_candidate(candidate, toc_levels, toc_paths) for candidate in candidates]
+    return [
+        rule_decision_for_candidate(candidate, toc_levels, toc_paths, domain_profile)
+        for candidate in candidates
+    ]
 
 
 def load_decisions(path: Path) -> dict[str, HeadingDecision]:

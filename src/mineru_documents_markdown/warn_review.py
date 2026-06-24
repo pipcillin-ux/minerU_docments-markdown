@@ -5,13 +5,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .io_utils import load_dotenv, load_json, load_jsonl
 from .llm_heading_assist import api_config, cache_key, call_chat_completions
 from .structure_utils import normalize_text, output_dirs
 
@@ -40,43 +40,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, help="Maximum number of WARN issues to review.")
     parser.add_argument("--force", action="store_true", help="Ignore cached LLM responses.")
     return parser.parse_args()
-
-
-def load_dotenv(path: Path = Path(".env")) -> None:
-    if not path.exists():
-        return
-    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip("\"'")
-        if key and key not in os.environ:
-            os.environ[key] = value
-
-
-def load_json(path: Path, default: Any) -> Any:
-    if not path.exists():
-        return default
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return default
-
-
-def load_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if not line.strip():
-            continue
-        try:
-            rows.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return rows
 
 
 def short_text(value: Any, limit: int = 260) -> str:

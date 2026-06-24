@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .build_structured_blocks import semantic_heading_level
+from .io_utils import load_json, load_jsonl
 from .structure_utils import is_numbered_prose_fragment, normalize_text, output_dirs
 
 
@@ -37,29 +38,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-per-category", type=int, default=8, help="Maximum samples per category.")
     return parser.parse_args()
-
-
-def load_json(path: Path, default: Any) -> Any:
-    if not path.exists():
-        return default
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return default
-
-
-def load_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            rows.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return rows
 
 
 def short_text(value: Any, limit: int = 220) -> str:

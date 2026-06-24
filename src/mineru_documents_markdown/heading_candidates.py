@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .defaults import HEADING_CANDIDATE_MIN_SCORE
 from .structure_utils import heading_key, item_text, normalize_text
 
 
@@ -134,7 +135,7 @@ def text_window(wrapped_items: list[dict[str, Any]], index: int, radius: int = 2
 def extract_heading_candidates(
     document: str,
     wrapped_items: list[dict[str, Any]],
-    min_score: float = 0.18,
+    min_score: float = HEADING_CANDIDATE_MIN_SCORE,
 ) -> list[HeadingCandidate]:
     candidates: list[HeadingCandidate] = []
     for index, wrapped in enumerate(wrapped_items):

@@ -60,6 +60,7 @@ Only validated results are published under `output/`:
 .venv/bin/mineru-run-pipeline \
   --docs-dir docs \
   --output-dir output \
+  --domain-profile tcm \
   --chunk-size 60 \
   --resubmit-failed \
   --repair-warn-with deepseek \
@@ -97,6 +98,7 @@ rebuild, repair, validation, and publication:
 .venv/bin/mineru-run-pipeline \
   --docs-dir docs \
   --output-dir output \
+  --domain-profile tcm \
   --skip-parse \
   --repair-warn-with deepseek \
   --fail-on warn
@@ -107,6 +109,7 @@ To reuse an existing review/override file during rebuild:
 ```bash
 .venv/bin/mineru-run-pipeline \
   --skip-parse \
+  --domain-profile tcm \
   --heading-review-overrides output/docs_warn_deepseek_review.json \
   --skip-review
 ```
@@ -117,6 +120,7 @@ To avoid DeepSeek/OpenAI-compatible review calls and only run local rules:
 .venv/bin/mineru-run-pipeline \
   --docs-dir docs \
   --output-dir output \
+  --domain-profile tcm \
   --skip-parse \
   --repair-warn-with none \
   --fail-on fail
@@ -129,6 +133,7 @@ main outputs:
 .venv/bin/mineru-run-pipeline \
   --docs-dir docs \
   --output-dir output \
+  --domain-profile tcm \
   --skip-parse \
   --heading-review-overrides output/docs_warn_deepseek_review.json \
   --skip-review \
@@ -254,23 +259,20 @@ output/<document-name>/
   assets/
 ```
 
-The Markdown file name is cleaned from the PDF name:
-
-- Leading numeric IDs are removed.
-- Trailing numeric IDs are removed.
-- Duplicate suffixes like `(1)` are removed.
-- Repeated spaces are collapsed.
+The output directory and Markdown file preserve the complete PDF stem. Batch
+mode computes every destination before creating document outputs and aborts on
+case-insensitive or Unicode-normalized collisions.
 
 Example:
 
 ```text
-docs/骨伤科专病中医临床诊治_13773573.pdf
+docs/1_2_3.pdf
 ```
 
 becomes:
 
 ```text
-output/骨伤科专病中医临床诊治/骨伤科专病中医临床诊治.md
+output/1_2_3/1_2_3.md
 ```
 
 ## Validate Outputs
@@ -304,7 +306,7 @@ manual review.
 Generate document profiles and structure diagnostics:
 
 ```bash
-.venv/bin/mineru-profile-documents
+.venv/bin/mineru-profile-documents --domain-profile tcm
 ```
 
 This writes:
@@ -320,7 +322,7 @@ output/<document-name>/quality_report.md
 Build structured blocks and semantic Markdown:
 
 ```bash
-.venv/bin/mineru-build-structured-blocks
+.venv/bin/mineru-build-structured-blocks --domain-profile tcm
 ```
 
 This writes:
@@ -387,10 +389,46 @@ The semantic rebuild now handles the main structure-drift cases explicitly:
   body outline, heading-level jumps, and same-pattern sibling inconsistencies.
   The current repository target is `0 FAIL / 0 WARN` across the full corpus.
 
+### Domain Profiles
+
+The parser defaults to `--domain-profile generic`. Generic mode uses only
+layout, numbering, syntax, TOC, and section-tree signals. It does not enable
+medical section names, clinical subsection terms, or Chinese image-table
+keywords.
+
+The current textbook corpus uses the built-in TCM profile:
+
+```bash
+.venv/bin/mineru-run-pipeline --domain-profile tcm ...
+```
+
+All structure commands accept the same profile value:
+
+```text
+generic
+tcm
+/absolute/or/relative/path/to/custom-profile.toml
+```
+
+Built-in profiles live under `src/mineru_documents_markdown/domains/`.
+`domain_profiles.py` validates custom TOML files and exposes one immutable
+profile object to profiling, TOC parsing, semantic rebuild, quality checks, and
+section-reasoning adoption.
+
+The semantic rebuild implementation is split by responsibility:
+
+```text
+semantic_rebuild.py       orchestration and block reconstruction
+semantic_render.py        Markdown rendering
+semantic_state.py         H1-H6 section-path state
+semantic_diagnostics.py   rebuilt-heading diagnostics
+section_reasoning/        collect/review/apply/adopt/summary/report CLI modules
+```
+
 To build body-only semantic Markdown:
 
 ```bash
-.venv/bin/mineru-build-structured-blocks --semantic-scope body
+.venv/bin/mineru-build-structured-blocks --domain-profile tcm --semantic-scope body
 ```
 
 Heading strategy options:
@@ -428,9 +466,9 @@ deterministic pipeline.
 Collect local section-reasoning candidates without calling an LLM:
 
 ```bash
-.venv/bin/mineru-section-reasoning --mode collect --limit 200
-.venv/bin/mineru-section-reasoning --mode report
-.venv/bin/mineru-section-reasoning --mode summary --min-confidence 0.86
+.venv/bin/mineru-section-reasoning --domain-profile tcm --mode collect --limit 200
+.venv/bin/mineru-section-reasoning --domain-profile tcm --mode report
+.venv/bin/mineru-section-reasoning --domain-profile tcm --mode summary --min-confidence 0.86
 ```
 
 `summary` is read-only. It aggregates the corpus-level review/adoption state so
@@ -449,7 +487,7 @@ documents already adopted into the main outputs.
 Review those candidates with DeepSeek/OpenAI-compatible JSON responses:
 
 ```bash
-.venv/bin/mineru-section-reasoning --mode review --limit 80 --review-jobs 4
+.venv/bin/mineru-section-reasoning --domain-profile tcm --mode review --limit 80 --review-jobs 4
 ```
 
 Review mode is incremental by default: it skips candidates already present in
@@ -469,7 +507,7 @@ output/<document-name>/section_reasoning_report.md
 Apply high-confidence reviewed decisions to reasoned sidecar outputs:
 
 ```bash
-.venv/bin/mineru-section-reasoning --mode apply --min-confidence 0.86
+.venv/bin/mineru-section-reasoning --domain-profile tcm --mode apply --min-confidence 0.86
 ```
 
 Apply mode is deliberately conservative today: it only materializes
@@ -496,6 +534,7 @@ Adopt high-confidence decisions into the main outputs:
 
 ```bash
 .venv/bin/mineru-section-reasoning \
+  --domain-profile tcm \
   --mode adopt \
   --target main \
   --min-confidence 0.86
@@ -526,7 +565,7 @@ For large documents, keep requests small:
 Run hardened heading quality checks:
 
 ```bash
-.venv/bin/mineru-heading-quality
+.venv/bin/mineru-heading-quality --domain-profile tcm
 ```
 
 Quality status meanings:
@@ -552,6 +591,7 @@ Use the formal pipeline for a stricter workflow:
 ```bash
 .venv/bin/mineru-run-pipeline \
   --skip-parse \
+  --domain-profile tcm \
   --heading-strategy hybrid \
   --llm-confidence-threshold 0.6 \
   --llm-batch-size 5 \

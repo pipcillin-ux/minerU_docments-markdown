@@ -53,6 +53,7 @@ docs/
 .venv/bin/mineru-run-pipeline \
   --docs-dir docs \
   --output-dir output \
+  --domain-profile tcm \
   --chunk-size 60 \
   --resubmit-failed \
   --repair-warn-with deepseek \
@@ -85,6 +86,7 @@ docs/
 .venv/bin/mineru-run-pipeline \
   --docs-dir docs \
   --output-dir output \
+  --domain-profile tcm \
   --skip-parse \
   --repair-warn-with deepseek \
   --fail-on warn
@@ -95,6 +97,7 @@ docs/
 ```bash
 .venv/bin/mineru-run-pipeline \
   --skip-parse \
+  --domain-profile tcm \
   --heading-review-overrides output/docs_warn_deepseek_review.json \
   --skip-review
 ```
@@ -105,6 +108,7 @@ docs/
 .venv/bin/mineru-run-pipeline \
   --docs-dir docs \
   --output-dir output \
+  --domain-profile tcm \
   --skip-parse \
   --repair-warn-with none \
   --fail-on fail
@@ -116,6 +120,7 @@ docs/
 .venv/bin/mineru-run-pipeline \
   --docs-dir docs \
   --output-dir output \
+  --domain-profile tcm \
   --skip-parse \
   --heading-review-overrides output/docs_warn_deepseek_review.json \
   --skip-review \
@@ -233,23 +238,20 @@ output/<文档名>/
   assets/
 ```
 
-文件名会自动清理：
-
-- 去掉开头数字书号。
-- 去掉结尾数字书号。
-- 去掉类似 `(1)` 的重复下载编号。
-- 合并连续空格。
+输出目录名和 Markdown 文件名会完整保留 PDF stem。批量模式会先计算全部
+目标路径，再检查大小写不敏感和 Unicode 规范化后的重名；发现冲突时不会创建
+任何文档输出。
 
 示例：
 
 ```text
-docs/骨伤科专病中医临床诊治_13773573.pdf
+docs/1_2_3.pdf
 ```
 
 会输出为：
 
 ```text
-output/骨伤科专病中医临床诊治/骨伤科专病中医临床诊治.md
+output/1_2_3/1_2_3.md
 ```
 
 ## 校验结果
@@ -280,7 +282,7 @@ MinerU 输出的 Markdown 是候选解析结果，不应直接等同于原文语
 生成文档画像和结构诊断：
 
 ```bash
-.venv/bin/mineru-profile-documents
+.venv/bin/mineru-profile-documents --domain-profile tcm
 ```
 
 该命令会生成：
@@ -296,7 +298,7 @@ output/<文档名>/quality_report.md
 生成结构化中间层和语义修复版 Markdown：
 
 ```bash
-.venv/bin/mineru-build-structured-blocks
+.venv/bin/mineru-build-structured-blocks --domain-profile tcm
 ```
 
 该命令会生成：
@@ -333,10 +335,35 @@ output/<文档名>/<文档名>.semantic.md
 - 非标题降级：目录索引、CIP/编目行、参考文献条目、坐标轴/OCR 数字串、图表说明尾巴、复习题问句、长编号正文句/列表项等不再参与正文标题层级判断。
 - 质量门控：`mineru-heading-quality` 会检查 TOC 泄漏、目录项进入正文大纲、标题层级跳跃、同模式兄弟标题不一致等问题；本仓库当前全量输出目标是 `0 FAIL / 0 WARN`。
 
+### 领域配置
+
+默认使用 `--domain-profile generic`。通用模式只启用版面、编号、句法、
+TOC 和章节树规则，不加载医学栏目名、临床小节词或中文图片表格关键词。
+
+当前教材语料应显式使用：
+
+```bash
+.venv/bin/mineru-run-pipeline --domain-profile tcm ...
+```
+
+profile 参数可传 `generic`、`tcm` 或自定义 TOML 路径，并由统一命令透传到
+文档画像、TOC 解析、语义重建、标题质检和章节推理采纳。内置配置位于
+`src/mineru_documents_markdown/domains/`。
+
+语义重建按职责拆分为：
+
+```text
+semantic_rebuild.py       编排与块重建
+semantic_render.py        Markdown 渲染
+semantic_state.py         H1-H6 标题路径状态
+semantic_diagnostics.py   重建诊断
+section_reasoning/        collect/review/apply/adopt/summary/report
+```
+
 如果只想生成正文范围的结构版 Markdown，可以使用：
 
 ```bash
-.venv/bin/mineru-build-structured-blocks --semantic-scope body
+.venv/bin/mineru-build-structured-blocks --domain-profile tcm --semantic-scope body
 ```
 
 标题识别策略：
@@ -368,9 +395,9 @@ export DEEPSEEK_MODEL="deepseek-chat"
 不调用大模型，仅收集章节语义推理候选：
 
 ```bash
-.venv/bin/mineru-section-reasoning --mode collect --limit 200
-.venv/bin/mineru-section-reasoning --mode report
-.venv/bin/mineru-section-reasoning --mode summary --min-confidence 0.86
+.venv/bin/mineru-section-reasoning --domain-profile tcm --mode collect --limit 200
+.venv/bin/mineru-section-reasoning --domain-profile tcm --mode report
+.venv/bin/mineru-section-reasoning --domain-profile tcm --mode summary --min-confidence 0.86
 ```
 
 `summary` 是只读汇总模式，不调用大模型，也不改主输出。它会把全库的复核
@@ -387,7 +414,7 @@ output/section_reasoning_summary.md
 使用 DeepSeek/OpenAI-compatible JSON 响应复核候选：
 
 ```bash
-.venv/bin/mineru-section-reasoning --mode review --limit 80 --review-jobs 4
+.venv/bin/mineru-section-reasoning --domain-profile tcm --mode review --limit 80 --review-jobs 4
 ```
 
 review 默认是增量模式：会跳过已经写入 `section_reasoning_decisions.jsonl`
@@ -405,7 +432,7 @@ output/<文档名>/section_reasoning_report.md
 将高置信复核决策应用到 reasoned 旁路产物：
 
 ```bash
-.venv/bin/mineru-section-reasoning --mode apply --min-confidence 0.86
+.venv/bin/mineru-section-reasoning --domain-profile tcm --mode apply --min-confidence 0.86
 ```
 
 apply 当前保持保守：只落地超过置信阈值的 `insert_child_section` 决策，然后基于原始主产物重新挂载正文块。候选收集会跳过已经锚定任一 section node 的正文标题；apply 也会用 `source_already_section_node` 拒绝历史遗留的重复锚点决策。
@@ -423,6 +450,7 @@ output/<文档名>/section_reasoning_apply_report.md
 
 ```bash
 .venv/bin/mineru-section-reasoning \
+  --domain-profile tcm \
   --mode adopt \
   --target main \
   --min-confidence 0.86
@@ -449,7 +477,7 @@ adopt 当前只自动晋升 `llm_section_reasoning` 来源的 `insert_child_sect
 运行固化后的标题质量检查：
 
 ```bash
-.venv/bin/mineru-heading-quality
+.venv/bin/mineru-heading-quality --domain-profile tcm
 ```
 
 质量状态含义：
@@ -471,6 +499,7 @@ output/<文档名>/heading_quality.md
 ```bash
 .venv/bin/mineru-run-pipeline \
   --skip-parse \
+  --domain-profile tcm \
   --heading-strategy hybrid \
   --llm-confidence-threshold 0.6 \
   --llm-batch-size 5 \

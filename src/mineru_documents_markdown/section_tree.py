@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .defaults import KNOWN_SECTION_CONFIDENCE
+
 from .structure_utils import heading_key, heading_level_from_text, normalize_text
 
 
@@ -366,7 +368,7 @@ def build_section_tree_from_toc(document: str, blocks: list[dict[str, Any]], toc
             source_heading_level=None,
             toc_heading_level=level,
             region="body",
-            confidence=0.82,
+            confidence=KNOWN_SECTION_CONFIDENCE,
             evidence=["toc_backbone", f"page_offset:{page_offset}"] if page_offset is not None else ["toc_backbone"],
         )
         nodes.append(node)

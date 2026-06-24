@@ -9,26 +9,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
-
-BODY_SECTION_TITLES = {
-    "概述",
-    "病因病机",
-    "临床表现",
-    "实验室和其他辅助检查",
-    "诊断要点",
-    "鉴别诊断",
-    "治疗",
-    "医案精选",
-    "名家名医论坛",
-    "难点与对策",
-    "经验与体会",
-    "预后与转归",
-    "预防与调护",
-    "现代研究",
-    "评述与展望",
-    "循证参考",
-    "手术治疗与围手术期处理",
-}
+from .domain_profiles import DomainProfile
 
 FRONT_MATTER_PATTERNS = (
     "目录",
@@ -115,12 +96,12 @@ def compact_heading_text(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
-def strip_toc_page_number(text: str) -> str:
+def strip_toc_page_number(text: str, known_titles: Iterable[str] = ()) -> str:
     text = normalize_text(text)
     text = re.sub(r"[.．。·•…\s]+", " ", text).strip()
     text = re.sub(r"\s+\d{1,4}\s*$", "", text).strip()
     compact = re.sub(r"\s+", "", text)
-    for title in sorted(BODY_SECTION_TITLES, key=len, reverse=True):
+    for title in sorted(known_titles, key=len, reverse=True):
         key = compact_heading_text(title)
         if compact.startswith(key) and compact[len(key) :].isdigit():
             return title
@@ -290,7 +271,7 @@ def has_body_text_after(wrapped_items: list[dict[str, Any]], index: int, window:
     return False
 
 
-def is_body_start_heading(text: str) -> bool:
+def is_body_start_heading(text: str, domain_profile: DomainProfile | None = None) -> bool:
     clean = normalize_text(text)
     if not clean or clean == "目录" or looks_like_toc_entry(clean):
         return False
@@ -300,12 +281,15 @@ def is_body_start_heading(text: str) -> bool:
         return True
     if re.match(r"^[上中下][篇编部卷]\s*\S{0,30}$", clean):
         return True
-    if is_probable_major_heading(clean):
+    if is_probable_major_heading(clean, domain_profile):
         return True
     return False
 
 
-def classify_item_regions(wrapped_items: list[dict[str, Any]]) -> dict[tuple[int, int, int], str]:
+def classify_item_regions(
+    wrapped_items: list[dict[str, Any]],
+    domain_profile: DomainProfile | None = None,
+) -> dict[tuple[int, int, int], str]:
     pages: dict[int, list[str]] = {}
     for wrapped in wrapped_items:
         text = normalize_text(item_text(wrapped["item"]))
@@ -349,7 +333,7 @@ def classify_item_regions(wrapped_items: list[dict[str, Any]]) -> dict[tuple[int
             if is_margin_item(item):
                 continue
             text = normalize_text(item_text(item))
-            if is_body_start_heading(text) and has_body_text_after(wrapped_items, index):
+            if is_body_start_heading(text, domain_profile) and has_body_text_after(wrapped_items, index):
                 body_start = index
                 break
 
@@ -432,9 +416,11 @@ def image_caption(item: dict[str, Any]) -> str:
     return normalize_text(str(captions or ""))
 
 
-def is_probable_body_section(text: str) -> bool:
+def is_probable_body_section(text: str, domain_profile: DomainProfile | None = None) -> bool:
+    if domain_profile is None:
+        return False
     clean = heading_key(text)
-    return clean in {heading_key(value) for value in BODY_SECTION_TITLES}
+    return clean in domain_profile.body_section_keys
 
 
 def is_probable_numbered_subsection(text: str) -> bool:
@@ -504,7 +490,10 @@ def heading_level_from_text(text: str, toc_levels: dict[str, int] | None = None)
     return None
 
 
-def toc_heading_levels(out_dir: Path) -> dict[str, int]:
+def toc_heading_levels(
+    out_dir: Path,
+    domain_profile: DomainProfile | None = None,
+) -> dict[str, int]:
     regions = classify_page_regions(out_dir)
     levels: dict[str, int] = {}
     for wrapped in iter_content_items(out_dir):
@@ -513,27 +502,30 @@ def toc_heading_levels(out_dir: Path) -> dict[str, int]:
             continue
         text = item_text(wrapped["item"])
         for line in text.splitlines():
-            title = strip_toc_page_number(line)
+            title = strip_toc_page_number(
+                line,
+                domain_profile.body_section_titles if domain_profile else (),
+            )
             key = heading_key(title)
             if not key or key in {"目录"}:
                 continue
-            if is_probable_body_section(title):
+            if is_probable_body_section(title, domain_profile):
                 levels.setdefault(key, 2)
             elif is_probable_numbered_subsection(title):
                 levels.setdefault(key, 3)
-            elif looks_like_toc_text(line) and is_probable_major_heading(title):
+            elif looks_like_toc_text(line) and is_probable_major_heading(title, domain_profile):
                 levels.setdefault(key, 1)
     return levels
 
 
-def is_probable_major_heading(text: str) -> bool:
+def is_probable_major_heading(text: str, domain_profile: DomainProfile | None = None) -> bool:
     raw = normalize_text(text)
     if re.search(r"[，,。；;：:]", raw):
         return False
     clean = heading_key(text)
     if not clean or len(clean) > 26:
         return False
-    if is_probable_body_section(text):
+    if is_probable_body_section(text, domain_profile):
         return False
     if is_probable_numbered_subsection(text):
         return False
@@ -545,4 +537,5 @@ def is_probable_major_heading(text: str) -> bool:
         return True
     if re.match(r"^第[一二三四五六七八九十百千万\d]+[章篇编部卷]", raw):
         return True
-    return any(keyword in clean for keyword in ("病", "症", "骨折", "脱位", "损伤", "综合征", "炎", "癌", "瘤"))
+    keywords = domain_profile.major_heading_keywords if domain_profile else ()
+    return any(keyword in clean for keyword in keywords)

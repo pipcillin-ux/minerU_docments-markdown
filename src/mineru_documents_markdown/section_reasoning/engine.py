@@ -6,18 +6,24 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import os
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .build_structured_blocks import render_semantic_markdown
-from .heading_quality import quality_for_output_dir, write_markdown_report
-from .llm_heading_assist import api_config, cache_key, call_chat_completions
-from .section_tree import attach_section_tree, clamp_level, end_block_for_range, toc_level_map, write_section_tree
-from .structure_utils import heading_key, normalize_text, output_dirs
+from ..build_structured_blocks import render_semantic_markdown
+from ..defaults import (
+    LLM_REVIEW_CONFIDENCE_THRESHOLD,
+    SECTION_REASONING_ADOPT_CONFIDENCE,
+    SECTION_REASONING_APPLY_CONFIDENCE,
+)
+from ..domain_profiles import DomainProfile, load_domain_profile
+from ..heading_quality import quality_for_output_dir, write_markdown_report
+from ..io_utils import load_dotenv, load_json, load_jsonl, write_jsonl
+from ..llm_heading_assist import api_config, cache_key, call_chat_completions
+from ..section_tree import attach_section_tree, clamp_level, end_block_for_range, toc_level_map, write_section_tree
+from ..structure_utils import heading_key, normalize_text, output_dirs
 
 
 ALLOWED_ACTIONS = {
@@ -38,6 +44,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect, review, summarize, or apply section-tree reasoning candidates.")
     parser.add_argument("--output-dir", default="output", help="Root output directory.")
     parser.add_argument("--document", action="append", help="Only process this output document name.")
+    parser.add_argument(
+        "--domain-profile",
+        default="generic",
+        help="Domain profile name (generic/tcm) or a TOML profile path.",
+    )
     parser.add_argument("--mode", choices=("collect", "report", "summary", "review", "apply", "adopt"), default="collect")
     parser.add_argument(
         "--target",
@@ -49,7 +60,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-per-document", type=int, default=40)
     parser.add_argument("--max-per-type", type=int, default=12)
     parser.add_argument("--context-radius", type=int, default=3)
-    parser.add_argument("--low-confidence-threshold", type=float, default=0.72)
+    parser.add_argument(
+        "--low-confidence-threshold",
+        type=float,
+        default=LLM_REVIEW_CONFIDENCE_THRESHOLD,
+    )
     parser.add_argument(
         "--min-confidence",
         type=float,
@@ -64,49 +79,6 @@ def parse_args() -> argparse.Namespace:
         help="Parallel LLM review workers. Decisions are still merged serially.",
     )
     return parser.parse_args()
-
-
-def load_dotenv(path: Path = Path(".env")) -> None:
-    if not path.exists():
-        return
-    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip("\"'")
-        if key and key not in os.environ:
-            os.environ[key] = value
-
-
-def load_json(path: Path, default: Any) -> Any:
-    if not path.exists():
-        return default
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return default
-
-
-def load_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if not line.strip():
-            continue
-        try:
-            rows.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return rows
-
-
-def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    with path.open("w", encoding="utf-8") as fh:
-        for row in rows:
-            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def short_text(value: Any, limit: int = 260) -> str:
@@ -1074,7 +1046,9 @@ def summary_mode(args: argparse.Namespace) -> int:
 def confidence_threshold(args: argparse.Namespace) -> float:
     if args.min_confidence is not None:
         return max(0.0, min(args.min_confidence, 1.0))
-    return 0.86 if args.mode in {"adopt", "summary"} else 0.82
+    if args.mode in {"adopt", "summary"}:
+        return SECTION_REASONING_ADOPT_CONFIDENCE
+    return SECTION_REASONING_APPLY_CONFIDENCE
 
 
 def block_index_by_id(blocks: list[dict[str, Any]]) -> dict[str, int]:
@@ -1336,6 +1310,7 @@ def build_reasoned_candidate_for_document(
     *,
     min_confidence: float,
     require_llm_source: bool = False,
+    domain_profile: DomainProfile | None = None,
 ) -> dict[str, Any]:
     blocks = load_jsonl(out_dir / "structured_blocks.jsonl")
     section_payload = load_json(out_dir / "section_tree.json", {"nodes": []})
@@ -1509,7 +1484,11 @@ def build_reasoned_candidate_for_document(
 
     reasoned_blocks = attach_section_tree(blocks, reasoned_payload)
     toc_levels = toc_level_map(list(toc_payload.get("nodes") or []))
-    semantic_text, semantic_count = render_semantic_markdown(reasoned_blocks, toc_levels)
+    semantic_text, semantic_count = render_semantic_markdown(
+        reasoned_blocks,
+        toc_levels,
+        domain_profile,
+    )
 
     return {
         "status": "ok",
@@ -1545,8 +1524,13 @@ def apply_decisions_for_document(
     out_dir: Path,
     *,
     min_confidence: float,
+    domain_profile: DomainProfile | None = None,
 ) -> dict[str, Any]:
-    result = build_reasoned_candidate_for_document(out_dir, min_confidence=min_confidence)
+    result = build_reasoned_candidate_for_document(
+        out_dir,
+        min_confidence=min_confidence,
+        domain_profile=domain_profile,
+    )
     if result.get("status") == "ok":
         write_reasoned_sidecars(out_dir, result)
     return public_result(result)
@@ -1732,8 +1716,11 @@ def write_main_outputs(out_dir: Path, result: dict[str, Any]) -> None:
     main_semantic_path(out_dir).write_text(str(result["semantic_text"]), encoding="utf-8")
 
 
-def adoption_quality_result(out_dir: Path) -> dict[str, Any]:
-    summary, issues = quality_for_output_dir(out_dir)
+def adoption_quality_result(
+    out_dir: Path,
+    domain_profile: DomainProfile | None = None,
+) -> dict[str, Any]:
+    summary, issues = quality_for_output_dir(out_dir, domain_profile)
     out_dir.joinpath("heading_quality.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -1815,11 +1802,13 @@ def adopt_decisions_for_document(
     min_confidence: float,
     target: str,
     write_backups: bool = False,
+    domain_profile: DomainProfile | None = None,
 ) -> dict[str, Any]:
     result = build_reasoned_candidate_for_document(
         out_dir,
         min_confidence=min_confidence,
         require_llm_source=True,
+        domain_profile=domain_profile,
     )
     if result.get("status") != "ok":
         adoption_result = {**public_result(result), "target": target, "adopted": [], "rolled_back": False}
@@ -1866,7 +1855,7 @@ def adopt_decisions_for_document(
         adoption_result["backups"] = write_pre_adopt_backups(snapshot)
     try:
         write_main_outputs(out_dir, result)
-        quality = adoption_quality_result(out_dir)
+        quality = adoption_quality_result(out_dir, domain_profile)
         adoption_result["quality"] = {
             "status": quality.get("status"),
             "issue_counts": quality.get("issue_counts") or {},
@@ -1874,7 +1863,7 @@ def adopt_decisions_for_document(
         counts = quality.get("issue_counts") or {}
         if counts.get("FAIL", 0) or counts.get("WARN", 0):
             restore_output_snapshot(snapshot)
-            adoption_quality_result(out_dir)
+            adoption_quality_result(out_dir, domain_profile)
             adoption_result["status"] = "rolled_back"
             adoption_result["rolled_back"] = True
             adoption_result["structural_issues"] = [
@@ -1885,7 +1874,7 @@ def adopt_decisions_for_document(
             return adoption_result
     except Exception as exc:  # noqa: BLE001 - failed adoption must restore primary outputs.
         restore_output_snapshot(snapshot)
-        adoption_quality_result(out_dir)
+        adoption_quality_result(out_dir, domain_profile)
         adoption_result["status"] = "rolled_back"
         adoption_result["rolled_back"] = True
         adoption_result["structural_issues"] = [*structural_issues, f"adoption_write_failed:{exc}"]
@@ -1950,13 +1939,18 @@ def apply_mode(args: argparse.Namespace) -> int:
     total_applied = 0
     processed = 0
     min_confidence = confidence_threshold(args)
+    domain_profile = load_domain_profile(getattr(args, "domain_profile", "generic"))
     for out_dir in output_dirs(root):
         if document_names and out_dir.name not in document_names:
             continue
         decisions = load_jsonl(decision_path(out_dir))
         if not decisions:
             continue
-        result = apply_decisions_for_document(out_dir, min_confidence=min_confidence)
+        result = apply_decisions_for_document(
+            out_dir,
+            min_confidence=min_confidence,
+            domain_profile=domain_profile,
+        )
         write_apply_report(out_dir, result)
         applied_count = len(result.get("applied") or [])
         total_applied += applied_count
@@ -1973,6 +1967,7 @@ def adopt_mode(args: argparse.Namespace) -> int:
     processed = 0
     failed = 0
     min_confidence = confidence_threshold(args)
+    domain_profile = load_domain_profile(getattr(args, "domain_profile", "generic"))
     for out_dir in output_dirs(root):
         if document_names and out_dir.name not in document_names:
             continue
@@ -1984,6 +1979,7 @@ def adopt_mode(args: argparse.Namespace) -> int:
             min_confidence=min_confidence,
             target=args.target,
             write_backups=args.adoption_backup,
+            domain_profile=domain_profile,
         )
         adopted_count = len(result.get("adopted") or [])
         total_adopted += adopted_count

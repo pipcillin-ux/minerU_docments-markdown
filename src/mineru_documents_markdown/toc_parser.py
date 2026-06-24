@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .domain_profiles import DomainProfile
 from .structure_utils import (
-    BODY_SECTION_TITLES,
     classify_item_regions,
     heading_level_from_text,
     heading_key,
@@ -23,9 +23,6 @@ from .structure_utils import (
     normalize_text,
     strip_toc_page_number,
 )
-
-
-KNOWN_SECTION_KEYS = {heading_key(value) for value in BODY_SECTION_TITLES}
 
 
 @dataclass
@@ -61,12 +58,15 @@ def page_hint(text: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def split_stuck_toc_line(line: str) -> list[str]:
+def split_stuck_toc_line(
+    line: str,
+    domain_profile: DomainProfile | None = None,
+) -> list[str]:
     """Split OCR-stuck TOC lines such as '实验室... 23诊断要点 23'."""
     line = normalize_text(line)
     if not line:
         return []
-    keys = sorted(KNOWN_SECTION_KEYS, key=len, reverse=True)
+    keys = sorted(domain_profile.body_section_keys if domain_profile else (), key=len, reverse=True)
     pattern = "|".join(re.escape(key) for key in keys)
     if not pattern:
         return [line]
@@ -91,9 +91,13 @@ def split_stuck_toc_line(line: str) -> list[str]:
     return parts or [line]
 
 
-def iter_toc_lines(wrapped_items: list[dict[str, Any]], max_page: int = 50) -> list[dict[str, Any]]:
+def iter_toc_lines(
+    wrapped_items: list[dict[str, Any]],
+    max_page: int = 50,
+    domain_profile: DomainProfile | None = None,
+) -> list[dict[str, Any]]:
     lines: list[dict[str, Any]] = []
-    regions = classify_item_regions(wrapped_items)
+    regions = classify_item_regions(wrapped_items, domain_profile)
     for wrapped in wrapped_items:
         page = int(wrapped["absolute_page"])
         if page > max_page:
@@ -105,13 +109,17 @@ def iter_toc_lines(wrapped_items: list[dict[str, Any]], max_page: int = 50) -> l
         if not text:
             continue
         for raw_line in text.splitlines():
-            for line in split_stuck_toc_line(raw_line):
+            for line in split_stuck_toc_line(raw_line, domain_profile):
                 clean = normalize_text(line)
                 if not clean:
                     continue
                 if clean == "目录":
                     continue
-                if looks_like_toc_entry(clean) or is_probable_body_section(clean) or is_probable_numbered_subsection(clean):
+                if (
+                    looks_like_toc_entry(clean)
+                    or is_probable_body_section(clean, domain_profile)
+                    or is_probable_numbered_subsection(clean)
+                ):
                     lines.append(
                         {
                             "line": clean,
@@ -124,15 +132,23 @@ def iter_toc_lines(wrapped_items: list[dict[str, Any]], max_page: int = 50) -> l
     return lines
 
 
-def infer_toc_level(line: str, mineru_level: Any, current_level: int | None) -> int | None:
-    title = strip_toc_page_number(line)
+def infer_toc_level(
+    line: str,
+    mineru_level: Any,
+    current_level: int | None,
+    domain_profile: DomainProfile | None = None,
+) -> int | None:
+    title = strip_toc_page_number(
+        line,
+        domain_profile.body_section_titles if domain_profile else (),
+    )
     key = heading_key(title)
     if not key:
         return None
     pattern_level = heading_level_from_text(title)
     if pattern_level is not None:
         return pattern_level
-    if key in KNOWN_SECTION_KEYS:
+    if domain_profile and key in domain_profile.body_section_keys:
         return 2
     if is_probable_numbered_subsection(title):
         return 3
@@ -140,23 +156,34 @@ def infer_toc_level(line: str, mineru_level: Any, current_level: int | None) -> 
         return 1
     if isinstance(mineru_level, int) and mineru_level <= 1 and looks_like_toc_text(line):
         return 1
-    if is_probable_major_heading(title) and looks_like_toc_text(line):
+    if is_probable_major_heading(title, domain_profile) and looks_like_toc_text(line):
         return 1
     if current_level == 1 and looks_like_toc_text(line):
         return 2
     return None
 
 
-def parse_toc_tree(wrapped_items: list[dict[str, Any]]) -> list[TocNode]:
+def parse_toc_tree(
+    wrapped_items: list[dict[str, Any]],
+    domain_profile: DomainProfile | None = None,
+) -> list[TocNode]:
     nodes: list[TocNode] = []
     stack: list[TocNode] = []
-    toc_lines = iter_toc_lines(wrapped_items)
+    toc_lines = iter_toc_lines(wrapped_items, domain_profile=domain_profile)
     for line_info in toc_lines:
-        title = strip_toc_page_number(line_info["line"])
+        title = strip_toc_page_number(
+            line_info["line"],
+            domain_profile.body_section_titles if domain_profile else (),
+        )
         key = heading_key(title)
         if not key:
             continue
-        level = infer_toc_level(line_info["line"], line_info.get("text_level"), stack[-1].level if stack else None)
+        level = infer_toc_level(
+            line_info["line"],
+            line_info.get("text_level"),
+            stack[-1].level if stack else None,
+            domain_profile,
+        )
         if level is None:
             continue
         while stack and stack[-1].level >= level:
