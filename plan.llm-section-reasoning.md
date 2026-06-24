@@ -468,3 +468,54 @@ output/section_reasoning_summary.md
 - 1 条已有 LLM 决策。
 - 1 个主输出中已采纳的 LLM 推理节点。
 - 其余文档进入 review queue，适合后续分批调用 DeepSeek 复核。
+
+## Phase 5E：父子章节范围与重复锚点优化
+
+状态：已实现。
+
+### 问题分析
+
+全库高置信决策完成后，采纳门仍报告 112 个
+`child_range_outside_parent`。逐项检查发现：
+
+- 103 个问题涉及待插入的 `llm_sec_*` 节点。
+- 其中 99 个候选的来源 block 已经是现有章节节点的锚点，只是模型给出了另一个
+  父节点；继续插入会制造重复章节和错误父子关系。
+- 只有 4 个候选是真正缺失的子章节，均来自“父标题与首个子标题合并在同一
+  block”一类版式。
+- 当前全量 range 重算会改动无关的原始节点，造成额外的 `sec_* -> sec_*`
+  范围问题。
+
+因此本轮不把所有问题都当作“扩父范围”处理，而是先区分重复锚点与真实缺失
+节点，再仅对受影响父链做范围修正。
+
+### 技术路径
+
+1. 候选收集阶段跳过已经被任一 section node 锚定的正文 heading。
+2. apply/adopt 阶段增加同样的防护，使历史候选和历史决策也能安全重放。
+3. 新增父节点有效包络检查：综合原有已验证 range 与下一个同级或更高级节点
+   推导出的自然边界，并沿祖先链取交集。
+4. 插入节点只按自身后续 heading 和父节点有效包络计算结束位置。
+5. 仅扩展插入节点的父节点与祖先范围，且不得越过各自的有效包络；无插入时
+   完全保留原始 section tree range。
+
+### 验收
+
+- 已锚定 block 不再生成 `local_heading_under_tree_node` 候选。
+- 历史重复决策以 `source_already_section_node` 拒绝，不产生第二个章节节点。
+- 无可采纳插入时，原始节点的 start/end range 字段保持不变。
+- 合并标题中的真实缺失子章节可以被插入，父节点和祖先范围包含该子节点。
+- 全库 section reasoning summary 不再出现新增父子范围问题。
+- 全库 heading quality 保持 `0 FAIL / 0 WARN`，output validation 保持 0 issue。
+
+### 实施结果
+
+- 全库候选由 1641 降至 1449，重复章节锚点不再进入新增子节点候选。
+- 增量验证阶段保留 30 条当前高置信 `insert_child_section` 决策，全部通过
+  结构门，其中包括 4 个合并标题中的真实缺失子章节。
+- Adoption structural issues 由 112 降至 0。
+- 从确定性基线执行正式统一命令后，共采纳 179 个有效 LLM reasoning nodes；
+  2 个历史节点因候选去重不再进入主输出。
+- 44 本文档 heading quality 为 `0 FAIL / 0 WARN`。
+- `mineru-validate-outputs` 检查 44 个目录，结果为 0 issue。
+- 新增 4 个父子范围专项单元测试并全部通过。

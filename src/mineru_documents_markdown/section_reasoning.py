@@ -293,6 +293,11 @@ def collect_candidates_for_document(
     node_by_id = {str(node.get("section_id") or ""): node for node in nodes}
     node_index_by_id = {str(node.get("section_id") or ""): index for index, node in enumerate(nodes)}
     blocks_by_id = {str(block.get("block_id") or ""): block for block in blocks}
+    anchored_block_ids = {
+        str(node.get("source_block_id") or "")
+        for node in nodes
+        if str(node.get("source_block_id") or "")
+    }
     title_counts = Counter(str(node.get("normalized_key") or heading_key(str(node.get("title") or ""))) for node in nodes)
     candidates: list[dict[str, Any]] = []
     type_counts: Counter[str] = Counter()
@@ -302,6 +307,8 @@ def collect_candidates_for_document(
         if block.get("region") != "body" or block.get("block_type") != "heading":
             continue
         if block.get("include_in_semantic") is False:
+            continue
+        if str(block.get("block_id") or "") in anchored_block_ids:
             continue
         path = block.get("tree_section_path") or []
         text_key = heading_key(str(block.get("text") or ""))
@@ -1150,7 +1157,10 @@ def node_start_index(node: dict[str, Any], indexes: dict[str, int]) -> int | Non
     return start
 
 
-def recompute_reasoned_ranges(nodes: list[dict[str, Any]], blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def natural_node_end_indexes(
+    nodes: list[dict[str, Any]],
+    blocks: list[dict[str, Any]],
+) -> dict[str, int]:
     indexes = block_index_by_id(blocks)
     original_order = {id(node): index for index, node in enumerate(nodes)}
 
@@ -1162,9 +1172,7 @@ def recompute_reasoned_ranges(nodes: list[dict[str, Any]], blocks: list[dict[str
 
     sorted_nodes = sorted(nodes, key=sort_key)
     start_indexes = [node_start_index(node, indexes) for node in sorted_nodes]
-
-    for order, node in enumerate(sorted_nodes, start=1):
-        node["document_order"] = order
+    natural_ends: dict[str, int] = {}
 
     for index, node in enumerate(sorted_nodes):
         start_index = start_indexes[index]
@@ -1180,20 +1188,145 @@ def recompute_reasoned_ranges(nodes: list[dict[str, Any]], blocks: list[dict[str
             if next_level <= level:
                 end_index = max(start_index, next_start_index - 1)
                 break
-        if node.get("reasoning_action") == "insert_child_section":
-            for block_index in range(start_index + 1, end_index + 1):
-                block = blocks[block_index]
-                if block.get("region") != "body" or block.get("include_in_semantic") is False:
-                    continue
-                if block.get("block_type") != "heading":
-                    continue
-                local_level = clamp_level(block.get("heading_level"))
-                if local_level is not None and local_level <= level:
-                    end_index = max(start_index, block_index - 1)
-                    break
-        end_block = end_block_for_range(blocks, start_index, end_index)
-        node["end_block_id"] = str(end_block.get("block_id") or node.get("start_block_id") or "")
-        node["end_page"] = block_page(end_block) or node.get("start_page")
+        section_id = str(node.get("section_id") or "")
+        if section_id:
+            natural_ends[section_id] = end_index
+
+    return natural_ends
+
+
+def ancestor_effective_end_index(
+    parent: dict[str, Any],
+    *,
+    node_by_id: dict[str, dict[str, Any]],
+    natural_ends: dict[str, int],
+    indexes: dict[str, int],
+) -> int | None:
+    boundaries: list[int] = []
+    current: dict[str, Any] | None = parent
+    visited: set[str] = set()
+    while current is not None:
+        section_id = str(current.get("section_id") or "")
+        if not section_id or section_id in visited:
+            break
+        visited.add(section_id)
+        inferred_boundary = natural_ends.get(section_id)
+        existing_boundary = indexes.get(str(current.get("end_block_id") or ""))
+        available_boundaries = [
+            boundary
+            for boundary in (inferred_boundary, existing_boundary)
+            if boundary is not None
+        ]
+        if available_boundaries:
+            boundaries.append(max(available_boundaries))
+        current = node_by_id.get(str(current.get("parent_id") or ""))
+    return min(boundaries) if boundaries else None
+
+
+def set_node_end_index(
+    node: dict[str, Any],
+    blocks: list[dict[str, Any]],
+    start_index: int,
+    end_index: int,
+) -> None:
+    end_block = end_block_for_range(blocks, start_index, end_index)
+    node["end_block_id"] = str(end_block.get("block_id") or node.get("start_block_id") or "")
+    node["end_page"] = block_page(end_block) or node.get("start_page")
+
+
+def recompute_reasoned_ranges(
+    original_nodes: list[dict[str, Any]],
+    inserted_nodes: list[dict[str, Any]],
+    blocks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not inserted_nodes:
+        return original_nodes
+
+    indexes = block_index_by_id(blocks)
+    nodes = [*original_nodes, *inserted_nodes]
+    original_order = {id(node): index for index, node in enumerate(nodes)}
+    node_by_id = {str(node.get("section_id") or ""): node for node in nodes}
+    natural_ends = natural_node_end_indexes(original_nodes, blocks)
+
+    def sort_key(node: dict[str, Any]) -> tuple[int, int, int]:
+        start = node_start_index(node, indexes)
+        if start is None:
+            start = len(blocks) + int(node.get("document_order") or 0)
+        return (start, int(node.get("level") or 99), original_order[id(node)])
+
+    sorted_nodes = sorted(nodes, key=sort_key)
+    start_indexes = [node_start_index(node, indexes) for node in sorted_nodes]
+    sorted_index_by_id = {
+        str(node.get("section_id") or ""): index
+        for index, node in enumerate(sorted_nodes)
+        if str(node.get("section_id") or "")
+    }
+
+    for order, node in enumerate(sorted_nodes, start=1):
+        node["document_order"] = order
+
+    for node in inserted_nodes:
+        section_id = str(node.get("section_id") or "")
+        sorted_index = sorted_index_by_id.get(section_id)
+        if sorted_index is None:
+            continue
+        start_index = start_indexes[sorted_index]
+        if start_index is None:
+            continue
+        level = clamp_level(node.get("level")) or 6
+        parent = node_by_id.get(str(node.get("parent_id") or ""))
+        parent_boundary = (
+            ancestor_effective_end_index(
+                parent,
+                node_by_id=node_by_id,
+                natural_ends=natural_ends,
+                indexes=indexes,
+            )
+            if parent is not None
+            else None
+        )
+        end_index = parent_boundary if parent_boundary is not None else len(blocks) - 1
+
+        for next_index in range(sorted_index + 1, len(sorted_nodes)):
+            next_start_index = start_indexes[next_index]
+            if next_start_index is None or next_start_index <= start_index:
+                continue
+            next_level = clamp_level(sorted_nodes[next_index].get("level")) or 6
+            if next_level <= level:
+                end_index = min(end_index, max(start_index, next_start_index - 1))
+                break
+
+        for block_index in range(start_index + 1, end_index + 1):
+            block = blocks[block_index]
+            if block.get("region") != "body" or block.get("include_in_semantic") is False:
+                continue
+            if block.get("block_type") != "heading":
+                continue
+            local_level = clamp_level(block.get("heading_level"))
+            if local_level is not None and local_level <= level:
+                end_index = max(start_index, block_index - 1)
+                break
+        set_node_end_index(node, blocks, start_index, end_index)
+
+        required_end = indexes.get(str(node.get("end_block_id") or ""), start_index)
+        current = parent
+        visited: set[str] = set()
+        while current is not None:
+            current_id = str(current.get("section_id") or "")
+            if not current_id or current_id in visited:
+                break
+            visited.add(current_id)
+            current_start = node_start_index(current, indexes)
+            if current_start is None:
+                break
+            current_end = indexes.get(str(current.get("end_block_id") or ""), current_start)
+            allowed_end = max(natural_ends.get(current_id, current_end), current_end)
+            target_end = min(max(current_end, required_end), allowed_end)
+            if target_end > current_end:
+                set_node_end_index(current, blocks, current_start, target_end)
+                current_end = indexes.get(str(current.get("end_block_id") or ""), target_end)
+            required_end = max(required_end, current_end)
+            current = node_by_id.get(str(current.get("parent_id") or ""))
 
     return sorted_nodes
 
@@ -1217,6 +1350,13 @@ def build_reasoned_candidate_for_document(
     node_by_id = {str(node.get("section_id") or ""): node for node in original_nodes}
     candidates_by_id = {str(candidate.get("candidate_id") or ""): candidate for candidate in candidates}
     blocks_by_id = {str(block.get("block_id") or ""): block for block in blocks}
+    block_indexes = block_index_by_id(blocks)
+    natural_ends = natural_node_end_indexes(original_nodes, blocks)
+    source_anchor_by_block = {
+        str(node.get("source_block_id") or ""): str(node.get("section_id") or "")
+        for node in original_nodes
+        if str(node.get("source_block_id") or "")
+    }
     existing_ids = set(node_by_id)
     inserted_nodes: list[dict[str, Any]] = []
     applied: list[dict[str, Any]] = []
@@ -1274,6 +1414,41 @@ def build_reasoned_candidate_for_document(
         if block.get("region") != "body" or block.get("include_in_semantic") is False:
             rejected.append({"candidate_id": candidate_id_value, "action": action, "reason": "non_body_or_excluded_block"})
             continue
+        block_id = str(block.get("block_id") or "")
+        if block_id in source_anchor_by_block:
+            rejected.append(
+                {
+                    "candidate_id": candidate_id_value,
+                    "action": action,
+                    "reason": "source_already_section_node",
+                    "existing_section_id": source_anchor_by_block[block_id],
+                }
+            )
+            continue
+
+        source_index = block_indexes.get(block_id)
+        parent_start = node_start_index(parent, block_indexes)
+        parent_boundary = ancestor_effective_end_index(
+            parent,
+            node_by_id=node_by_id,
+            natural_ends=natural_ends,
+            indexes=block_indexes,
+        )
+        if (
+            source_index is None
+            or parent_start is None
+            or parent_boundary is None
+            or source_index <= parent_start
+            or source_index > parent_boundary
+        ):
+            rejected.append(
+                {
+                    "candidate_id": candidate_id_value,
+                    "action": action,
+                    "reason": "source_outside_parent_natural_boundary",
+                }
+            )
+            continue
 
         title = short_text(decision.get("title")) or short_text(block.get("text"))
         if not title:
@@ -1306,6 +1481,7 @@ def build_reasoned_candidate_for_document(
         )
         inserted_nodes.append(inserted)
         node_by_id[section_id] = inserted
+        source_anchor_by_block[block_id] = section_id
         applied.append(
             {
                 "candidate_id": candidate_id_value,
@@ -1317,7 +1493,7 @@ def build_reasoned_candidate_for_document(
             }
         )
 
-    reasoned_nodes = recompute_reasoned_ranges([*original_nodes, *inserted_nodes], blocks)
+    reasoned_nodes = recompute_reasoned_ranges(original_nodes, inserted_nodes, blocks)
     reasoned_payload = {
         **section_payload,
         "document": str(section_payload.get("document") or out_dir.name),

@@ -116,10 +116,10 @@ main outputs:
   --docs-dir docs \
   --output-dir output \
   --skip-parse \
+  --heading-review-overrides output/docs_warn_deepseek_review.json \
   --skip-review \
-  --repair-warn-with none \
   --section-reasoning adopt \
-  --section-reasoning-min-confidence 0.82 \
+  --section-reasoning-min-confidence 0.86 \
   --fail-on warn
 ```
 
@@ -127,6 +127,8 @@ main outputs:
 pass deterministic structural checks and a post-adoption heading-quality gate.
 If the gate fails, the primary `section_tree.json`, `structured_blocks.jsonl`,
 and `<document-name>.semantic.md` files are restored.
+The existing heading-review overrides are applied during the rebuild so the
+pipeline can pass the pre-adoption quality gate without another API call.
 Whenever `--section-reasoning collect|review|apply|adopt` is enabled, the
 pipeline also refreshes `output/section_reasoning_summary.csv` and
 `output/section_reasoning_summary.md`.
@@ -449,14 +451,21 @@ output/<document-name>/section_reasoning_report.md
 Apply high-confidence reviewed decisions to reasoned sidecar outputs:
 
 ```bash
-.venv/bin/mineru-section-reasoning --mode apply --min-confidence 0.82
+.venv/bin/mineru-section-reasoning --mode apply --min-confidence 0.86
 ```
 
 Apply mode is deliberately conservative today: it only materializes
 `insert_child_section` decisions that pass the confidence threshold, then
-recomputes section ranges and reattaches blocks from the original main outputs.
-It does not overwrite `section_tree.json`, `structured_blocks.jsonl`, or
-`<document-name>.semantic.md`.
+reattaches blocks from the original main outputs. Candidate collection skips
+body headings that already anchor any section node, and apply rejects stale
+decisions for those blocks with `source_already_section_node`.
+
+Range updates are tree-local: the inserted node is bounded by peer headings and
+the effective parent envelope, while only its parent/ancestor chain may be
+extended. Existing validated ranges can widen a TOC-inferred boundary, but no
+ancestor may be crossed. If no node is inserted, the original ranges are kept
+unchanged. Apply does not overwrite `section_tree.json`,
+`structured_blocks.jsonl`, or `<document-name>.semantic.md`.
 
 ```text
 output/<document-name>/section_tree.reasoned.json
@@ -471,7 +480,7 @@ Adopt high-confidence decisions into the main outputs:
 .venv/bin/mineru-section-reasoning \
   --mode adopt \
   --target main \
-  --min-confidence 0.82
+  --min-confidence 0.86
 ```
 
 Adopt mode currently promotes only `insert_child_section` decisions from
@@ -480,6 +489,12 @@ checks that source text is unchanged, prevents new section-range defects, and
 rolls back if the adopted document produces FAIL/WARN heading-quality issues.
 Rerunning adopt is idempotent for documents that have no new adoptable
 decisions.
+
+Run the focused range-regression tests with:
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+```
 
 For large documents, keep requests small:
 

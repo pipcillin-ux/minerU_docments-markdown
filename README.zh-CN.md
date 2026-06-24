@@ -108,14 +108,15 @@ docs/
   --docs-dir docs \
   --output-dir output \
   --skip-parse \
+  --heading-review-overrides output/docs_warn_deepseek_review.json \
   --skip-review \
-  --repair-warn-with none \
   --section-reasoning adopt \
-  --section-reasoning-min-confidence 0.82 \
+  --section-reasoning-min-confidence 0.86 \
   --fail-on warn
 ```
 
 `adopt` 会先生成 reasoned 候选，再只晋升通过确定性结构校验和采纳后标题质量门的决策。如果质量门失败，会恢复原主输出的 `section_tree.json`、`structured_blocks.jsonl` 和 `<文档名>.semantic.md`。
+重建时会先应用已有的标题复核覆盖文件，因此无需再次调用 API，也可以通过章节采纳前的质量门。
 只要启用 `--section-reasoning collect|review|apply|adopt`，流水线也会同步刷新
 `output/section_reasoning_summary.csv` 和
 `output/section_reasoning_summary.md`。
@@ -393,10 +394,12 @@ output/<文档名>/section_reasoning_report.md
 将高置信复核决策应用到 reasoned 旁路产物：
 
 ```bash
-.venv/bin/mineru-section-reasoning --mode apply --min-confidence 0.82
+.venv/bin/mineru-section-reasoning --mode apply --min-confidence 0.86
 ```
 
-apply 当前保持保守：只落地超过置信阈值的 `insert_child_section` 决策，然后基于原始主产物重算章节范围并重新挂载正文块。它不会覆盖 `section_tree.json`、`structured_blocks.jsonl` 或 `<文档名>.semantic.md`。
+apply 当前保持保守：只落地超过置信阈值的 `insert_child_section` 决策，然后基于原始主产物重新挂载正文块。候选收集会跳过已经锚定任一 section node 的正文标题；apply 也会用 `source_already_section_node` 拒绝历史遗留的重复锚点决策。
+
+章节范围采用局部树更新：新增节点由后续同级标题和父节点有效包络共同约束，只允许扩展它的父节点与祖先链。已经通过校验的原范围可以放宽 TOC 推导出的过早边界，但不能越过任一祖先；没有新增节点时，原始 range 完全不变。apply 不会覆盖 `section_tree.json`、`structured_blocks.jsonl` 或 `<文档名>.semantic.md`。
 
 ```text
 output/<文档名>/section_tree.reasoned.json
@@ -411,11 +414,17 @@ output/<文档名>/section_reasoning_apply_report.md
 .venv/bin/mineru-section-reasoning \
   --mode adopt \
   --target main \
-  --min-confidence 0.82
+  --min-confidence 0.86
 ```
 
 adopt 当前只自动晋升 `llm_section_reasoning` 来源的 `insert_child_section` 决策。它会生成 `section_reasoning_adoption_report.md`，检查原文文本未被改写、没有新增章节范围缺陷，并在采纳后出现 FAIL/WARN 时自动回滚。
 对没有新增可采纳决策的文档，重复运行 adopt 是幂等的，不会把已处理文档误判为失败。
+
+运行父子范围专项回归测试：
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+```
 
 大文档建议控制单次请求大小：
 
