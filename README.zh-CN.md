@@ -45,8 +45,8 @@ docs/
 
 ## 一条命令跑完全流程
 
-正式推荐命令会从 `docs/` 读取 PDF，写入 `output/`，并串起解析、诊断、
-语义重建、WARN 修复和最终校验：
+正式推荐命令会从 `docs/` 读取 PDF，在独立工作目录中完成解析、诊断、
+语义重建、WARN 修复和最终校验；只有验证通过的结果才会发布到 `output/`：
 
 ```bash
 .venv/bin/mineru-run-pipeline \
@@ -61,16 +61,24 @@ docs/
 流水线顺序：
 
 ```text
-解析 -> 输出校验 -> 文档画像/结构诊断 -> 语义重建/章节树回填 -> 标题质量检查
-     -> DeepSeek 复核 WARN -> 定向重建 -> 最终质量检查
-     -> 可选章节推理/主输出采纳 -> 最终输出校验
+解析 -> 诊断 -> 重建 -> 修复 -> 验证 -> 发布
 ```
+
+默认工作目录是与 `output/` 同级的 `.output.pipeline-work`。macOS 下，
+`--skip-parse` 会优先使用 APFS copy-on-write 克隆初始化工作区，不会为
+大型语料再做一份完整物理复制。诊断报告、复核文件、章节推理旁路产物和
+质量报告等所有子命令输出都只写入工作区。
+
+如果任一阶段失败或流程被中断，正式 `output/` 保持不变，工作目录会保留。
+重新运行同一条命令即可续跑；如果希望丢弃失败现场并重新初始化，增加
+`--fresh-work`。全部质量门通过后，工作目录才会以可回滚的目录交换方式发布。
 
 `--fail-on warn` 用于把最终目标收紧到 `0 FAIL / 0 WARN`；如果只希望
 阻断明确错误、允许保留 WARN，可改成 `--fail-on fail`。DeepSeek WARN
 修复默认需要 `DEEPSEEK_API_KEY` 或 `.env` 中的 `deepseek_api_key`。
 
-如果 `output/` 已经有解析结果，只想复跑诊断、语义重建和修复：
+如果 `output/` 已经有解析结果，`--skip-parse` 会先把正式快照克隆到工作区，
+然后复跑诊断、语义重建、修复、验证和发布：
 
 ```bash
 .venv/bin/mineru-run-pipeline \
@@ -122,7 +130,7 @@ docs/
 `output/section_reasoning_summary.md`。
 
 DeepSeek 复核会从环境变量或 `.env` 读取 `DEEPSEEK_API_KEY` /
-`deepseek_api_key`，并输出：
+`deepseek_api_key`。复核文件先写入工作区，发布成功后才出现在：
 
 ```text
 output/heading_warn_deepseek_review.json

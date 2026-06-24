@@ -50,8 +50,9 @@ By default, every `*.pdf` in `docs/` is processed.
 
 ## One-Command Pipeline
 
-The formal command reads PDFs from `docs/`, writes outputs under `output/`, and
-runs parse, diagnostics, semantic rebuild, WARN repair, and final validation:
+The formal command reads PDFs from `docs/` and runs parse, diagnostics,
+semantic rebuild, WARN repair, and final validation in an isolated workspace.
+Only validated results are published under `output/`:
 
 ```bash
 .venv/bin/mineru-run-pipeline \
@@ -66,18 +67,29 @@ runs parse, diagnostics, semantic rebuild, WARN repair, and final validation:
 The pipeline runs:
 
 ```text
-parse -> validate -> profile -> semantic rebuild / section-tree assignment -> heading quality
-      -> DeepSeek WARN review -> targeted rebuild -> final quality
-      -> optional section reasoning/adoption -> final validate
+parse -> diagnose -> rebuild -> repair -> validate -> publish
 ```
+
+The default workspace is `.output.pipeline-work` beside `output/`. On macOS it
+is initialized with an APFS copy-on-write clone when `--skip-parse` is used, so
+the published output remains unchanged without making a second physical copy
+of the full corpus. Every subprocess writes to the workspace, including
+diagnostic reports, review files, section reasoning sidecars, and quality
+reports.
+
+If a stage fails or the process is interrupted, `output/` is unchanged and the
+workspace is retained. Run the same command again to resume. Add
+`--fresh-work` to discard the retained workspace and start again. After all
+quality gates pass, the workspace replaces `output/` with rollback protection.
 
 `--fail-on warn` enforces a final `0 FAIL / 0 WARN` target. Use
 `--fail-on fail` when WARN items should remain reviewable but non-blocking.
 DeepSeek WARN repair requires `DEEPSEEK_API_KEY` or `deepseek_api_key` in
 `.env` when WARN items need LLM review.
 
-If `output/` already contains parsed documents, rerun only diagnostics,
-semantic rebuild, repair, and validation:
+If `output/` already contains parsed documents, `--skip-parse` clones that
+published snapshot into the workspace, then reruns diagnostics, semantic
+rebuild, repair, validation, and publication:
 
 ```bash
 .venv/bin/mineru-run-pipeline \
@@ -134,7 +146,8 @@ pipeline also refreshes `output/section_reasoning_summary.csv` and
 `output/section_reasoning_summary.md`.
 
 DeepSeek review reads `DEEPSEEK_API_KEY` or `deepseek_api_key` from the
-environment or `.env`. It writes review overrides to:
+environment or `.env`. Review overrides are created in the workspace and become
+visible at these paths only after publication:
 
 ```text
 output/heading_warn_deepseek_review.json

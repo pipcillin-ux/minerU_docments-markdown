@@ -17,6 +17,7 @@ tmp/
 # Source PDFs and parsed outputs can be large or sensitive.
 docs/
 output/
+.*.pipeline-work/
 
 # Local quarantine for unrelated files found during workspace cleanup.
 archive/orphaned-js/
