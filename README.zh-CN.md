@@ -9,7 +9,7 @@
 ```bash
 cd /Users/piperacillin/code/python_code/pdf
 python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m pip install -e .
 ```
 
 安装后会得到 8 个命令：
@@ -23,6 +23,17 @@ mineru-heading-quality
 mineru-build-regression-fixtures
 mineru-section-reasoning
 mineru-run-pipeline
+```
+
+开发和 CI 质量检查使用：
+
+```bash
+.venv/bin/python -m pip install -e ".[dev]"
+.venv/bin/ruff check .
+.venv/bin/ruff format --check .
+.venv/bin/python -m unittest discover -s tests -v
+.venv/bin/coverage run -m unittest discover -s tests
+.venv/bin/coverage report
 ```
 
 在 `.env` 中配置 MinerU token：
@@ -524,7 +535,9 @@ output/regression_fixtures/structure_regression_samples.md
 ## 注意事项
 
 - 项目采用标准 `src/` 布局，核心代码在 `src/mineru_documents_markdown/`。
-- 顶层的 `mineru_batch_parse.py`、`validate_outputs.py`、`profile_documents.py`、`build_structured_blocks.py` 是兼容入口，旧命令仍可使用。
+- 安装项目后统一使用“环境准备”中列出的 console scripts；根目录兼容入口和
+  `requirements.txt` 不再保留。
+- 本地 `plan*.md` 会被忽略；长期有效的流程和架构说明应写入 README 或源码文档。
 - 默认推荐使用本地上传模式，也就是只传本地 PDF 路径。
 - `--url` 只适合单个公网 PDF URL。
 - 真正解析时会把 PDF 内容上传到 MinerU。只想查看分批范围时，请使用 `--dry-run`。

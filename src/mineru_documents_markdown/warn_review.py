@@ -15,7 +15,6 @@ from .io_utils import load_dotenv, load_json, load_jsonl
 from .llm_heading_assist import api_config, cache_key, call_chat_completions
 from .structure_utils import normalize_text, output_dirs
 
-
 ALLOWED_ACTIONS = {"keep_heading", "promote_to_heading", "demote_to_paragraph", "split_heading"}
 REVIEW_STATUSES = {"needs_fix", "benign_warn", "uncertain"}
 
@@ -98,9 +97,7 @@ def collect_warn_candidates(
             continue
         quality = load_json(out_dir / "heading_quality.json", {})
         issues = [
-            issue
-            for issue in quality.get("issues", [])
-            if isinstance(issue, dict) and issue.get("severity") == "WARN"
+            issue for issue in quality.get("issues", []) if isinstance(issue, dict) and issue.get("severity") == "WARN"
         ]
         if not issues:
             continue
@@ -240,8 +237,7 @@ def review_with_cache(candidate: dict[str, Any], cache_dir: Path, force: bool) -
 
 def write_markdown_report(path: Path, payload: dict[str, Any]) -> None:
     counts = Counter(
-        str(review.get("deepseek", {}).get("review_status") or "unknown")
-        for review in payload.get("reviews", [])
+        str(review.get("deepseek", {}).get("review_status") or "unknown") for review in payload.get("reviews", [])
     )
     lines = [
         "# DeepSeek Heading WARN Review",
@@ -279,7 +275,9 @@ def main() -> int:
     args = parse_args()
     load_dotenv()
     output_root = Path(args.output_dir)
-    review_output = Path(args.review_output) if args.review_output else output_root / "heading_warn_deepseek_review.json"
+    review_output = (
+        Path(args.review_output) if args.review_output else output_root / "heading_warn_deepseek_review.json"
+    )
     markdown_output = Path(args.markdown_output) if args.markdown_output else review_output.with_suffix(".md")
     cache_dir = Path(args.cache_dir) if args.cache_dir else output_root / "heading_warn_review_cache"
     document_names = set(args.document) if args.document else None

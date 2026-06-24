@@ -14,7 +14,6 @@ from .build_structured_blocks import semantic_heading_level
 from .io_utils import load_json, load_jsonl
 from .structure_utils import is_numbered_prose_fragment, normalize_text, output_dirs
 
-
 CATEGORY_TITLES = {
     "toc_boundary": "TOC/body boundary",
     "toc_backbone_tree": "TOC-backbone section tree",

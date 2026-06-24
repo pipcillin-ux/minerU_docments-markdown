@@ -50,7 +50,7 @@ class FakeResponse:
 
 
 class FakeConnection:
-    instances: list["FakeConnection"] = []
+    instances: list[FakeConnection] = []
     fail_first_send = False
 
     def __init__(self, host: str, timeout: int) -> None:

@@ -13,4 +13,3 @@ __all__ = [
     "review_candidate",
     "review_mode",
 ]
-

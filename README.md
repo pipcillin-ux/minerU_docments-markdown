@@ -14,7 +14,7 @@ Create the project virtual environment and install dependencies:
 ```bash
 cd /Users/piperacillin/code/python_code/pdf
 python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m pip install -e .
 ```
 
 This installs 8 CLI commands:
@@ -28,6 +28,17 @@ mineru-heading-quality
 mineru-build-regression-fixtures
 mineru-section-reasoning
 mineru-run-pipeline
+```
+
+For development and CI checks:
+
+```bash
+.venv/bin/python -m pip install -e ".[dev]"
+.venv/bin/ruff check .
+.venv/bin/ruff format --check .
+.venv/bin/python -m unittest discover -s tests -v
+.venv/bin/coverage run -m unittest discover -s tests
+.venv/bin/coverage report
 ```
 
 Put your MinerU token in `.env`:
@@ -619,9 +630,10 @@ demotion, and tree-driven Markdown heading rendering.
 
 - The project uses a standard `src/` layout. Core code lives under
   `src/mineru_documents_markdown/`.
-- Top-level `mineru_batch_parse.py`, `validate_outputs.py`,
-  `profile_documents.py`, and `build_structured_blocks.py` are compatibility
-  wrappers, so the previous commands still work.
+- Install the project and use the console scripts listed in Setup. Root-level
+  compatibility wrappers and `requirements.txt` are intentionally not kept.
+- Local `plan*.md` files are ignored; durable workflow and architecture
+  guidance belongs in the README or tracked source documentation.
 - `--url` can be used for a single public PDF URL, but local upload mode is the
   default and recommended for this project.
 - Real parsing uploads PDF content to MinerU. Use `--dry-run` if you only want

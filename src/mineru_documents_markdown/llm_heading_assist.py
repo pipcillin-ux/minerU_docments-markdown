@@ -15,8 +15,8 @@ from .defaults import LLM_REVIEW_CONFIDENCE_THRESHOLD
 from .domain_profiles import DomainProfile
 from .heading_candidates import HeadingCandidate
 from .heading_decisions import HeadingDecision, rule_decision_for_candidate
-from .http_utils import retry_after_seconds, retry_delay
-
+from .http_utils import retry_after_seconds as retry_after_seconds
+from .http_utils import retry_delay
 
 SYSTEM_PROMPT = """You repair PDF heading structure. Return strict JSON only.
 For each candidate decide one action:
@@ -183,11 +183,7 @@ def decision_from_llm(data: dict[str, Any], fallback: HeadingDecision) -> Headin
 
 
 def batch_decisions_from_llm(data: dict[str, Any], fallbacks: list[HeadingDecision]) -> list[HeadingDecision]:
-    by_id = {
-        str(item.get("candidate_id") or ""): item
-        for item in data.get("decisions", [])
-        if isinstance(item, dict)
-    }
+    by_id = {str(item.get("candidate_id") or ""): item for item in data.get("decisions", []) if isinstance(item, dict)}
     decisions: list[HeadingDecision] = []
     for fallback in fallbacks:
         item = by_id.get(fallback.candidate_id)

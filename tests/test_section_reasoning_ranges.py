@@ -102,9 +102,7 @@ class SectionReasoningRangeTests(unittest.TestCase):
                 low_confidence_threshold=0.72,
             )
 
-            self.assertFalse(
-                any(item.get("candidate_type") == "local_heading_under_tree_node" for item in candidates)
-            )
+            self.assertFalse(any(item.get("candidate_type") == "local_heading_under_tree_node" for item in candidates))
 
     def test_existing_source_anchor_is_rejected_without_range_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -7,9 +7,9 @@ import platform
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable
 
 
 class WorkspaceError(RuntimeError):

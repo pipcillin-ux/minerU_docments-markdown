@@ -11,4 +11,3 @@ __all__ = [
     "adopt_mode",
     "validate_reasoned_adoption",
 ]
-

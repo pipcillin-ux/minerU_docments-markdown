@@ -13,6 +13,7 @@ build/
 dist/
 tmp/
 *.log
+plan*.md
 
 # Source PDFs and parsed outputs can be large or sensitive.
 docs/

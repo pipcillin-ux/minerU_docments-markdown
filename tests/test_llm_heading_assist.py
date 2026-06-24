@@ -12,7 +12,7 @@ from mineru_documents_markdown.llm_heading_assist import call_chat_completions, 
 
 
 class FakeResponse:
-    def __enter__(self) -> "FakeResponse":
+    def __enter__(self) -> FakeResponse:
         return self
 
     def __exit__(self, *args: object) -> None:

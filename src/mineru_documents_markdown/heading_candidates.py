@@ -11,7 +11,6 @@ from typing import Any
 from .defaults import HEADING_CANDIDATE_MIN_SCORE
 from .structure_utils import heading_key, item_text, normalize_text
 
-
 SENTENCE_PUNCTUATION = "，,。；;：:！？!?"
 
 

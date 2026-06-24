@@ -37,4 +37,3 @@ __all__ = [
     "summary_csv_path",
     "summary_report_path",
 ]
-

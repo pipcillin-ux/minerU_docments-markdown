@@ -16,7 +16,6 @@ from pypdf import PdfReader
 from .domain_profiles import DomainProfile, load_domain_profile
 from .structure_utils import (
     classify_page_regions,
-    compact_heading_text,
     content_list_path,
     image_caption,
     item_text,

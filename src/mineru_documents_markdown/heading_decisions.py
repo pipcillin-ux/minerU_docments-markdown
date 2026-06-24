@@ -18,17 +18,16 @@ from .defaults import (
 from .domain_profiles import DomainProfile
 from .heading_candidates import SENTENCE_PUNCTUATION, HeadingCandidate
 from .structure_utils import (
-    heading_level_from_text,
     heading_key,
+    heading_level_from_text,
+    is_numbered_prose_fragment,
     is_probable_body_section,
     is_probable_major_heading,
     is_probable_numbered_subsection,
-    is_numbered_prose_fragment,
-    normalize_text,
     non_heading_line_like,
+    normalize_text,
     reference_caption_like,
 )
-
 
 DecisionAction = str
 
@@ -330,11 +329,7 @@ def rule_decision_for_candidate(
             reason="The candidate contains sentence punctuation or is too long for a reliable heading.",
         )
 
-    action = (
-        "promote_to_heading"
-        if candidate.candidate_score >= HEADING_PROMOTION_MIN_SCORE
-        else "demote_to_paragraph"
-    )
+    action = "promote_to_heading" if candidate.candidate_score >= HEADING_PROMOTION_MIN_SCORE else "demote_to_paragraph"
     is_heading = action == "promote_to_heading"
     return HeadingDecision(
         candidate_id=candidate.candidate_id,
@@ -357,10 +352,7 @@ def build_rule_decisions(
     toc_paths: dict[str, list[str]],
     domain_profile: DomainProfile | None = None,
 ) -> list[HeadingDecision]:
-    return [
-        rule_decision_for_candidate(candidate, toc_levels, toc_paths, domain_profile)
-        for candidate in candidates
-    ]
+    return [rule_decision_for_candidate(candidate, toc_levels, toc_paths, domain_profile) for candidate in candidates]
 
 
 def load_decisions(path: Path) -> dict[str, HeadingDecision]:

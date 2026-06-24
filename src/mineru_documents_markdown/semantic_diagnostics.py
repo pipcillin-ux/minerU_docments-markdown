@@ -46,4 +46,3 @@ def heading_diagnostics(
         "long_heading_samples": long_heading_samples[:30],
         "h1_subsection_samples": h1_subsection_samples[:30],
     }
-

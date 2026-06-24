@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import email.utils
-from datetime import datetime, timezone
-from typing import Callable
+from collections.abc import Callable
+from datetime import UTC, datetime
 
 
 def retry_after_seconds(
@@ -23,12 +23,12 @@ def retry_after_seconds(
     except (TypeError, ValueError, OverflowError):
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     current = now() if callable(now) else now
     if current is None:
-        current = datetime.now(timezone.utc)
+        current = datetime.now(UTC)
     if current.tzinfo is None:
-        current = current.replace(tzinfo=timezone.utc)
+        current = current.replace(tzinfo=UTC)
     return max(0.0, (parsed - current).total_seconds())
 
 

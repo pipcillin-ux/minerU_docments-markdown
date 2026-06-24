@@ -71,10 +71,7 @@ def front_matter_heading_splits(
     toc_levels: dict[str, int],
     domain_profile: DomainProfile | None = None,
 ) -> list[tuple[str, int]]:
-    parts = [
-        normalize_text(part)
-        for part in split_stuck_toc_line(content, domain_profile)
-    ]
+    parts = [normalize_text(part) for part in split_stuck_toc_line(content, domain_profile)]
     parts = [part for part in parts if part]
     if len(parts) <= 1:
         return []
@@ -132,11 +129,7 @@ def render_semantic_markdown(
         if block_type == "toc":
             lines.extend(toc_plain_lines(content, domain_profile))
         elif block_type == "heading":
-            toc_lines = (
-                toc_semantic_lines(content, toc_levels, domain_profile)
-                if region == "front_matter"
-                else None
-            )
+            toc_lines = toc_semantic_lines(content, toc_levels, domain_profile) if region == "front_matter" else None
             if toc_lines is not None:
                 lines.extend(toc_lines)
             else:
@@ -170,22 +163,14 @@ def render_semantic_markdown(
                 lines.append(footnote)
             lines.append("")
         elif block_type == "list":
-            toc_lines = (
-                toc_semantic_lines(content, toc_levels, domain_profile)
-                if region == "front_matter"
-                else None
-            )
+            toc_lines = toc_semantic_lines(content, toc_levels, domain_profile) if region == "front_matter" else None
             if toc_lines is not None:
                 lines.extend(toc_lines)
             else:
                 lines.extend(f"- {line.strip()}" for line in content.splitlines() if line.strip())
                 lines.append("")
         else:
-            toc_lines = (
-                toc_semantic_lines(content, toc_levels, domain_profile)
-                if region == "front_matter"
-                else None
-            )
+            toc_lines = toc_semantic_lines(content, toc_levels, domain_profile) if region == "front_matter" else None
             if toc_lines is not None:
                 lines.extend(toc_lines)
             elif content.strip():
@@ -195,4 +180,3 @@ def render_semantic_markdown(
     semantic_text = "\n".join(lines)
     semantic_text = re.sub(r"\n{3,}", "\n\n", semantic_text).strip() + "\n"
     return semantic_text, semantic_count
-

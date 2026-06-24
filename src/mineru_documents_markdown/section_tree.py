@@ -10,9 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .defaults import KNOWN_SECTION_CONFIDENCE
-
 from .structure_utils import heading_key, heading_level_from_text, normalize_text
-
 
 TREE_VERSION = 1
 
@@ -146,7 +144,9 @@ def infer_tree_level(block: dict[str, Any], toc_levels: dict[str, int]) -> tuple
     return level, evidence, max(0.0, min(confidence, 1.0))
 
 
-def heading_blocks(blocks: list[dict[str, Any]], toc_nodes: list[dict[str, Any]]) -> list[tuple[int, dict[str, Any], int, list[str], float]]:
+def heading_blocks(
+    blocks: list[dict[str, Any]], toc_nodes: list[dict[str, Any]]
+) -> list[tuple[int, dict[str, Any], int, list[str], float]]:
     toc_levels = toc_level_map(toc_nodes)
     resolved: list[tuple[int, dict[str, Any], int, list[str], float]] = []
     for index, block in enumerate(blocks):
@@ -320,7 +320,9 @@ def last_block_id_for_page(blocks: list[dict[str, Any]], page: int | None) -> st
     return fallback
 
 
-def build_section_tree_from_toc(document: str, blocks: list[dict[str, Any]], toc_nodes: list[dict[str, Any]]) -> dict[str, Any]:
+def build_section_tree_from_toc(
+    document: str, blocks: list[dict[str, Any]], toc_nodes: list[dict[str, Any]]
+) -> dict[str, Any]:
     nodes: list[SectionNode] = []
     stack: list[SectionNode] = []
     max_page = max_block_page(blocks)
@@ -329,7 +331,7 @@ def build_section_tree_from_toc(document: str, blocks: list[dict[str, Any]], toc
     heading_anchors = body_heading_anchors(blocks)
     block_by_id = {str(block.get("block_id") or ""): block for block in blocks}
 
-    for order, toc_node in enumerate(ordered_toc, start=1):
+    for toc_node in ordered_toc:
         title = normalize_text(str(toc_node.get("title") or ""))
         if not title:
             continue

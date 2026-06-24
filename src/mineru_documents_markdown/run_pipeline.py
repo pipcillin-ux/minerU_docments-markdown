@@ -9,8 +9,8 @@ import shlex
 import subprocess
 import sys
 import time
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from .defaults import HEADING_CANDIDATE_MIN_SCORE, LLM_REVIEW_CONFIDENCE_THRESHOLD
 from .mineru_batch_parse import output_document_dir

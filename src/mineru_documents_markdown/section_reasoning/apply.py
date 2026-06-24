@@ -19,4 +19,3 @@ __all__ = [
     "natural_node_end_indexes",
     "recompute_reasoned_ranges",
 ]
-

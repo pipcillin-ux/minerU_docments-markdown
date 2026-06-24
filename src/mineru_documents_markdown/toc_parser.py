@@ -11,12 +11,12 @@ from typing import Any
 from .domain_profiles import DomainProfile
 from .structure_utils import (
     classify_item_regions,
-    heading_level_from_text,
     heading_key,
-    item_region_key,
+    heading_level_from_text,
     is_probable_body_section,
     is_probable_major_heading,
     is_probable_numbered_subsection,
+    item_region_key,
     item_text,
     looks_like_toc_entry,
     looks_like_toc_text,

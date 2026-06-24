@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import argparse
 import collections
-import json
 import http.client
+import json
 import os
-import stat
 import re
 import shutil
+import stat
 import sys
 import tempfile
 import time
@@ -24,10 +24,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable
-
+from typing import Any
 
 API_BASE = "https://mineru.net/api/v4"
 DEFAULT_CHUNK_SIZE = 200
@@ -86,8 +86,7 @@ class RateLimiter:
 
             sleep_seconds = max(0.001, self.timestamps[0] + self.window_seconds - now)
             print(
-                f"MinerU {self.label} rate limit reached; "
-                f"sleeping {sleep_seconds:.1f}s...",
+                f"MinerU {self.label} rate limit reached; sleeping {sleep_seconds:.1f}s...",
                 flush=True,
             )
             self.sleeper(sleep_seconds)
@@ -113,7 +112,7 @@ class BatchTask:
     data: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "BatchTask":
+    def from_dict(cls, raw: dict[str, Any]) -> BatchTask:
         return cls(
             index=int(raw["index"]),
             page_range=str(raw["page_range"]),
@@ -226,8 +225,7 @@ def get_pdf_page_count(pdf_path: Path) -> int:
             from PyPDF2 import PdfReader  # type: ignore
         except ImportError as exc:
             raise SystemExit(
-                "Missing PDF reader dependency. Install one with: "
-                "python3 -m pip install -r requirements.txt"
+                "Missing PDF reader dependency. Install the project with: python -m pip install -e ."
             ) from exc
 
     with pdf_path.open("rb") as fh:
@@ -239,10 +237,7 @@ def make_ranges(total_pages: int, chunk_size: int) -> list[str]:
         raise ValueError("PDF has no pages.")
     if chunk_size <= 0:
         raise ValueError("--chunk-size must be positive.")
-    return [
-        f"{start}-{min(start + chunk_size - 1, total_pages)}"
-        for start in range(1, total_pages + 1, chunk_size)
-    ]
+    return [f"{start}-{min(start + chunk_size - 1, total_pages)}" for start in range(1, total_pages + 1, chunk_size)]
 
 
 def parse_page_range(page_range: str) -> tuple[int, int]:
@@ -399,7 +394,7 @@ def request_json(
         except urllib.error.URLError as exc:
             if attempt >= max_retries:
                 raise MinerUError(f"Request failed for {url}: {exc}") from exc
-        time.sleep(min(2 ** attempt, 30))
+        time.sleep(min(2**attempt, 30))
 
     try:
         data = json.loads(raw)
@@ -478,9 +473,7 @@ def request_upload_batch(args: argparse.Namespace, pdf_path: Path, tasks: list[B
     if not batch_id:
         raise MinerUError(f"Upload URL request returned no batch_id: {response}")
     if len(upload_urls) != len(tasks):
-        raise MinerUError(
-            f"Upload URL count mismatch: expected {len(tasks)}, got {len(upload_urls)}"
-        )
+        raise MinerUError(f"Upload URL count mismatch: expected {len(tasks)}, got {len(upload_urls)}")
 
     for task, upload_url in zip(tasks, upload_urls, strict=True):
         task.batch_id = batch_id
@@ -525,7 +518,7 @@ def upload_pdf_to_signed_url(pdf_path: Path, upload_url: str, max_retries: int) 
         except (OSError, http.client.HTTPException) as exc:
             if attempt >= max_retries:
                 raise MinerUError(f"Upload failed for signed URL: {exc}") from exc
-            time.sleep(min(2 ** attempt, 30))
+            time.sleep(min(2**attempt, 30))
         finally:
             connection.close()
 
@@ -714,7 +707,7 @@ def download_file(url: str, dest: Path, token: str | None = None, max_retries: i
         except urllib.error.URLError:
             if attempt >= max_retries:
                 raise
-            time.sleep(min(2 ** attempt, 30))
+            time.sleep(min(2**attempt, 30))
 
 
 def part_dir(base: Path, task: BatchTask) -> Path:

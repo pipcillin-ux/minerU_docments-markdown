@@ -15,4 +15,3 @@ def update_heading_stack(stack: list[str], level: int, heading_text: str) -> lis
 
 def heading_stack_path(stack: list[str]) -> list[str]:
     return [value for value in stack if value]
-

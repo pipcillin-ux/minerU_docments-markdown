@@ -10,7 +10,7 @@ from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from ..build_structured_blocks import render_semantic_markdown
 from ..defaults import (
@@ -24,7 +24,6 @@ from ..io_utils import load_dotenv, load_json, load_jsonl, write_jsonl
 from ..llm_heading_assist import api_config, cache_key, call_chat_completions
 from ..section_tree import attach_section_tree, clamp_level, end_block_for_range, toc_level_map, write_section_tree
 from ..structure_utils import heading_key, normalize_text, output_dirs
-
 
 ALLOWED_ACTIONS = {
     "keep",
@@ -41,7 +40,9 @@ Prefer uncertain when evidence is insufficient."""
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Collect, review, summarize, or apply section-tree reasoning candidates.")
+    parser = argparse.ArgumentParser(
+        description="Collect, review, summarize, or apply section-tree reasoning candidates."
+    )
     parser.add_argument("--output-dir", default="output", help="Root output directory.")
     parser.add_argument("--document", action="append", help="Only process this output document name.")
     parser.add_argument(
@@ -49,7 +50,9 @@ def parse_args() -> argparse.Namespace:
         default="generic",
         help="Domain profile name (generic/tcm) or a TOML profile path.",
     )
-    parser.add_argument("--mode", choices=("collect", "report", "summary", "review", "apply", "adopt"), default="collect")
+    parser.add_argument(
+        "--mode", choices=("collect", "report", "summary", "review", "apply", "adopt"), default="collect"
+    )
     parser.add_argument(
         "--target",
         choices=("sidecar", "main"),
@@ -82,7 +85,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def short_text(value: Any, limit: int = 260) -> str:
-    text = normalize_text(str(value or ""))
+    text = cast(str, normalize_text(str(value or "")))
     return text[:limit]
 
 
@@ -229,7 +232,9 @@ def make_section_candidate(
         "current_section": section_summary(node),
         "nearby_blocks": [],
         "nearby_sections": nearby_sections(nodes, node_index),
-        "toc_context": toc_context(toc_nodes, str(node.get("normalized_key") or heading_key(str(node.get("title") or "")))),
+        "toc_context": toc_context(
+            toc_nodes, str(node.get("normalized_key") or heading_key(str(node.get("title") or "")))
+        ),
         "question": section_question(candidate_type),
     }
 
@@ -266,11 +271,11 @@ def collect_candidates_for_document(
     node_index_by_id = {str(node.get("section_id") or ""): index for index, node in enumerate(nodes)}
     blocks_by_id = {str(block.get("block_id") or ""): block for block in blocks}
     anchored_block_ids = {
-        str(node.get("source_block_id") or "")
-        for node in nodes
-        if str(node.get("source_block_id") or "")
+        str(node.get("source_block_id") or "") for node in nodes if str(node.get("source_block_id") or "")
     }
-    title_counts = Counter(str(node.get("normalized_key") or heading_key(str(node.get("title") or ""))) for node in nodes)
+    title_counts = Counter(
+        str(node.get("normalized_key") or heading_key(str(node.get("title") or ""))) for node in nodes
+    )
     candidates: list[dict[str, Any]] = []
     type_counts: Counter[str] = Counter()
     seen: set[str] = set()
@@ -546,7 +551,7 @@ def review_payload(candidate: dict[str, Any]) -> dict[str, Any]:
 
 def unwrap_decision(data: dict[str, Any]) -> dict[str, Any]:
     if isinstance(data.get("decision"), dict):
-        return data["decision"]
+        return cast(dict[str, Any], data["decision"])
     decisions = data.get("decisions")
     if isinstance(decisions, list) and decisions and isinstance(decisions[0], dict):
         return decisions[0]
@@ -675,7 +680,9 @@ def review_mode(args: argparse.Namespace) -> int:
     ordered_results: list[tuple[Path, dict[str, Any]] | None] = [None] * len(candidates)
     if jobs == 1:
         for index, (out_dir, candidate) in enumerate(candidates, start=1):
-            print(f"[{index}/{len(candidates)}] Reviewing {candidate.get('document')} {candidate.get('candidate_type')}")
+            print(
+                f"[{index}/{len(candidates)}] Reviewing {candidate.get('document')} {candidate.get('candidate_type')}"
+            )
             ordered_results[index - 1] = (out_dir, review_candidate(out_dir, candidate, args.force))
     else:
         print(f"Reviewing {len(candidates)} candidate(s) with {jobs} worker(s).")
@@ -785,9 +792,7 @@ def summarize_document(out_dir: Path, *, min_confidence: float) -> dict[str, Any
     decisions = load_jsonl(decision_path(out_dir))
     current_candidate_ids = {str(candidate.get("candidate_id") or "") for candidate in candidates}
     current_decisions = [
-        decision
-        for decision in decisions
-        if str(decision.get("candidate_id") or "") in current_candidate_ids
+        decision for decision in decisions if str(decision.get("candidate_id") or "") in current_candidate_ids
     ]
     orphan_decision_count = len(decisions) - len(current_decisions)
     candidate_counts = Counter(str(candidate.get("candidate_type") or "") for candidate in candidates)
@@ -943,7 +948,9 @@ def write_summary_report(path: Path, rows: list[dict[str, Any]], *, min_confiden
         "## Review Queue",
         "",
     ]
-    review_queue = sorted(review_queue, key=lambda row: int(row.get("candidates") or 0) - int(row.get("decisions") or 0), reverse=True)
+    review_queue = sorted(
+        review_queue, key=lambda row: int(row.get("candidates") or 0) - int(row.get("decisions") or 0), reverse=True
+    )
     lines.extend(
         summary_table(
             review_queue,
@@ -1045,7 +1052,7 @@ def summary_mode(args: argparse.Namespace) -> int:
 
 def confidence_threshold(args: argparse.Namespace) -> float:
     if args.min_confidence is not None:
-        return max(0.0, min(args.min_confidence, 1.0))
+        return max(0.0, min(float(args.min_confidence), 1.0))
     if args.mode in {"adopt", "summary"}:
         return SECTION_REASONING_ADOPT_CONFIDENCE
     return SECTION_REASONING_APPLY_CONFIDENCE
@@ -1056,8 +1063,11 @@ def block_index_by_id(blocks: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def block_page(block: dict[str, Any]) -> int | None:
+    value = block.get("page")
+    if value is None:
+        return None
     try:
-        page = int(block.get("page"))
+        page = int(value)
     except (TypeError, ValueError):
         return None
     return page if page >= 0 else None
@@ -1186,11 +1196,7 @@ def ancestor_effective_end_index(
         visited.add(section_id)
         inferred_boundary = natural_ends.get(section_id)
         existing_boundary = indexes.get(str(current.get("end_block_id") or ""))
-        available_boundaries = [
-            boundary
-            for boundary in (inferred_boundary, existing_boundary)
-            if boundary is not None
-        ]
+        available_boundaries = [boundary for boundary in (inferred_boundary, existing_boundary) if boundary is not None]
         if available_boundaries:
             boundaries.append(max(available_boundaries))
         current = node_by_id.get(str(current.get("parent_id") or ""))
@@ -1383,11 +1389,17 @@ def build_reasoned_candidate_for_document(
         if block is None:
             rejected.append({"candidate_id": candidate_id_value, "action": action, "reason": "missing_source_block"})
             continue
-        if short_text(current_block.get("text")) and short_text(current_block.get("text")) != short_text(block.get("text")):
-            rejected.append({"candidate_id": candidate_id_value, "action": action, "reason": "candidate_block_text_changed"})
+        if short_text(current_block.get("text")) and short_text(current_block.get("text")) != short_text(
+            block.get("text")
+        ):
+            rejected.append(
+                {"candidate_id": candidate_id_value, "action": action, "reason": "candidate_block_text_changed"}
+            )
             continue
         if block.get("region") != "body" or block.get("include_in_semantic") is False:
-            rejected.append({"candidate_id": candidate_id_value, "action": action, "reason": "non_body_or_excluded_block"})
+            rejected.append(
+                {"candidate_id": candidate_id_value, "action": action, "reason": "non_body_or_excluded_block"}
+            )
             continue
         block_id = str(block.get("block_id") or "")
         if block_id in source_anchor_by_block:
@@ -1638,7 +1650,11 @@ def structure_issues_for_payload(section_payload: dict[str, Any], blocks: list[d
             continue
         child_range = ranges.get(section_id)
         parent_range = ranges.get(parent_id)
-        if child_range and parent_range and not (parent_range[0] <= child_range[0] <= child_range[1] <= parent_range[1]):
+        if (
+            child_range
+            and parent_range
+            and not (parent_range[0] <= child_range[0] <= child_range[1] <= parent_range[1])
+        ):
             issues.append(f"child_range_outside_parent:{section_id}->{parent_id}")
         parent_level = clamp_level(parent.get("level"))
         child_level = clamp_level(node.get("level"))
@@ -1660,9 +1676,7 @@ def validate_reasoned_adoption(out_dir: Path, result: dict[str, Any]) -> list[st
     base_structure_issues = set(structure_issues_for_payload(original_payload, original_blocks))
     reasoned_structure_issues = structure_issues_for_payload(section_payload, reasoned_blocks)
     issues.extend(
-        f"new_structure_issue:{issue}"
-        for issue in reasoned_structure_issues
-        if issue not in base_structure_issues
+        f"new_structure_issue:{issue}" for issue in reasoned_structure_issues if issue not in base_structure_issues
     )
 
     node_by_id = {str(node.get("section_id") or ""): node for node in section_payload.get("nodes") or []}
@@ -1705,7 +1719,9 @@ def validate_reasoned_adoption(out_dir: Path, result: dict[str, Any]) -> list[st
                     local_level = clamp_level(assigned_block.get("heading_level"))
                     node_level = clamp_level(node.get("level"))
                     if local_level is not None and node_level is not None and local_level <= node_level:
-                        issues.append(f"applied_node_contains_peer_heading:{section_id}:{assigned_block.get('block_id')}")
+                        issues.append(
+                            f"applied_node_contains_peer_heading:{section_id}:{assigned_block.get('block_id')}"
+                        )
                         break
     return issues
 
@@ -1726,7 +1742,7 @@ def adoption_quality_result(
         encoding="utf-8",
     )
     write_markdown_report(out_dir, summary, issues)
-    return summary
+    return cast(dict[str, Any], summary)
 
 
 def write_adoption_report(out_dir: Path, result: dict[str, Any]) -> None:
@@ -1780,11 +1796,7 @@ def write_adoption_report(out_dir: Path, result: dict[str, Any]) -> None:
     rejected = result.get("rejected") or []
     if rejected:
         for item in rejected[:120]:
-            lines.append(
-                "- "
-                f"`{item.get('candidate_id')}` action=`{item.get('action')}` "
-                f"reason=`{item.get('reason')}`"
-            )
+            lines.append(f"- `{item.get('candidate_id')}` action=`{item.get('action')}` reason=`{item.get('reason')}`")
     else:
         lines.append("- No decisions were rejected.")
 
@@ -1922,12 +1934,7 @@ def write_apply_report(out_dir: Path, result: dict[str, Any]) -> None:
     rejected = result.get("rejected") or []
     if rejected:
         for item in rejected[:120]:
-            lines.append(
-                "- "
-                f"`{item.get('candidate_id')}` "
-                f"action=`{item.get('action')}` "
-                f"reason=`{item.get('reason')}`"
-            )
+            lines.append(f"- `{item.get('candidate_id')}` action=`{item.get('action')}` reason=`{item.get('reason')}`")
     else:
         lines.append("- No decisions were rejected.")
     apply_report_path(out_dir).write_text("\n".join(lines) + "\n", encoding="utf-8")

@@ -14,8 +14,9 @@ from .domain_profiles import DomainProfile, load_domain_profile
 from .heading_candidates import block_id as make_block_id
 from .heading_candidates import extract_heading_candidates, write_heading_candidates
 from .heading_decisions import HeadingDecision, build_rule_decisions, split_heading_text, write_heading_decisions
-from .llm_heading_assist import maybe_assist_decisions
 from .io_utils import load_dotenv
+from .llm_heading_assist import maybe_assist_decisions
+from .section_tree import attach_section_tree, build_section_tree, write_section_tree
 from .semantic_diagnostics import heading_diagnostics
 from .semantic_render import (
     front_matter_heading_splits,
@@ -26,29 +27,26 @@ from .semantic_render import (
     toc_semantic_lines,
 )
 from .semantic_state import heading_stack_path, update_heading_stack
-from .section_tree import attach_section_tree, build_section_tree, write_section_tree
 from .structure_utils import (
     classify_item_regions,
     classify_page_regions,
-    heading_level_from_text,
     heading_key,
+    heading_level_from_text,
     image_caption,
-    item_region_key,
+    is_numbered_prose_fragment,
     is_probable_body_section,
     is_probable_major_heading,
     is_probable_numbered_subsection,
-    is_numbered_prose_fragment,
+    item_region_key,
     item_text,
-    load_tasks,
+    iter_content_items,
     looks_like_toc_entry,
     markdown_file,
     non_heading_line_like,
     normalize_text,
     output_dirs,
-    reference_caption_like,
     repeated_margin_texts,
     table_caption,
-    iter_content_items,
 )
 from .toc_parser import parse_toc_tree, toc_level_map, toc_path_map, write_toc_tree
 
@@ -411,7 +409,6 @@ def build_for_output_dir(
     heading_review_overrides: dict[str, dict[str, HeadingDecision]] | None = None,
     domain_profile: DomainProfile | None = None,
 ) -> tuple[int, int]:
-    tasks = load_tasks(out_dir)
     raw_wrapped_items = list(iter_content_items(out_dir))
     page_regions = classify_page_regions(out_dir)
     repeated_margins = repeated_margin_texts(out_dir)
@@ -612,9 +609,7 @@ def build_for_output_dir(
                 semantic_lines.extend(toc_plain_lines(content, domain_profile))
             elif block_type == "heading" and heading_level:
                 toc_lines = (
-                    toc_semantic_lines(content, toc_levels, domain_profile)
-                    if region == "front_matter"
-                    else None
+                    toc_semantic_lines(content, toc_levels, domain_profile) if region == "front_matter" else None
                 )
                 if toc_lines is not None:
                     semantic_lines.extend(toc_lines)
@@ -645,9 +640,7 @@ def build_for_output_dir(
                 semantic_lines.append("")
             elif block_type == "list":
                 toc_lines = (
-                    toc_semantic_lines(content, toc_levels, domain_profile)
-                    if region == "front_matter"
-                    else None
+                    toc_semantic_lines(content, toc_levels, domain_profile) if region == "front_matter" else None
                 )
                 if toc_lines is not None:
                     semantic_lines.extend(toc_lines)
@@ -659,9 +652,7 @@ def build_for_output_dir(
                     semantic_lines.append("")
             else:
                 toc_lines = (
-                    toc_semantic_lines(content, toc_levels, domain_profile)
-                    if region == "front_matter"
-                    else None
+                    toc_semantic_lines(content, toc_levels, domain_profile) if region == "front_matter" else None
                 )
                 if toc_lines is not None:
                     semantic_lines.extend(toc_lines)

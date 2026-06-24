@@ -17,7 +17,6 @@ from .io_utils import load_json, load_jsonl
 from .structure_utils import heading_key, looks_like_toc_entry, normalize_text, output_dirs
 from .toc_parser import split_stuck_toc_line
 
-
 IssueSeverity = str
 
 
@@ -65,10 +64,7 @@ def looks_like_stuck_toc(text: str, domain_profile: DomainProfile | None = None)
     clean = normalize_text(text)
     if not clean:
         return False
-    return bool(
-        re.search(r"\d", clean)
-        and len(split_stuck_toc_line(clean, domain_profile)) > 1
-    )
+    return bool(re.search(r"\d", clean) and len(split_stuck_toc_line(clean, domain_profile)) > 1)
 
 
 def is_sentence_heading(text: str) -> bool:
@@ -80,10 +76,10 @@ def is_sentence_heading(text: str) -> bool:
 
 def is_actionable_sentence_heading(block: dict[str, Any], text: str) -> bool:
     clean = normalize_text(text)
-    if (
-        block.get("decision_source") == "deepseek_warn_review"
-        and block.get("repair_action") in {"keep_heading", "promote_to_heading"}
-    ):
+    if block.get("decision_source") == "deepseek_warn_review" and block.get("repair_action") in {
+        "keep_heading",
+        "promote_to_heading",
+    }:
         return False
     if block.get("toc_heading_level"):
         return False
@@ -598,7 +594,12 @@ def check_section_tree(section_payload: dict[str, Any], blocks: list[dict[str, A
         if first_tree_index is not None and index < first_tree_index:
             continue
         page = block.get("page")
-        if first_tree_index is None and isinstance(page, int) and isinstance(first_tree_page, int) and page < first_tree_page:
+        if (
+            first_tree_index is None
+            and isinstance(page, int)
+            and isinstance(first_tree_page, int)
+            and page < first_tree_page
+        ):
             continue
         section_id = str(block.get("section_id") or "")
         block_id = str(block.get("block_id") or "")
@@ -751,10 +752,14 @@ def quality_for_output_dir(
 ) -> tuple[dict[str, Any], list[HeadingIssue]]:
     toc_payload = load_json(out_dir / "toc_tree.json", {"nodes": []})
     section_tree_path = out_dir / "section_tree.json"
-    section_payload = load_json(
-        section_tree_path,
-        {"_invalid": True},
-    ) if section_tree_path.exists() else {"_missing": True}
+    section_payload = (
+        load_json(
+            section_tree_path,
+            {"_invalid": True},
+        )
+        if section_tree_path.exists()
+        else {"_missing": True}
+    )
     blocks = load_jsonl(out_dir / "structured_blocks.jsonl")
     decisions = load_jsonl(out_dir / "heading_decisions.jsonl")
     issues: list[HeadingIssue] = []
